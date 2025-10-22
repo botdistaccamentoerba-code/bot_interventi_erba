@@ -1,0 +1,36 @@
+name: Controlled Bot Restart
+on:
+  workflow_dispatch:  # Solo manuale
+  schedule:
+    # Controlla ogni ora se serve restart
+    - cron: '0 * * * *'
+
+jobs:
+  check-and-restart:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Check bot state
+        id: check_state
+        run: |
+          python .github/scripts/check_restart.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIST_ID: ${{ secrets.BOT_GIST_ID }}
+
+      - name: Restart if needed
+        if: steps.check_state.outputs.restart_needed == 'true'
+        uses: johnbeynon/redeploy-action@v1.1.0
+        with:
+          service-id: ${{ secrets.RENDER_SERVICE_ID }}
+          api-key: ${{ secrets.RENDER_API_KEY }}
+        env:
+          RENDER_DEPLOY_TRIGGER: ${{ steps.check_state.outputs.restart_reason }}
+
+      - name: Skip restart
+        if: steps.check_state.outputs.restart_needed == 'false'
+        run: |
+          echo "⏸️ Restart non necessario"
+          echo "Ultimo restart: ${{ steps.check_state.outputs.last_restart }}"
