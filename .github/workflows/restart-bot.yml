@@ -17,7 +17,7 @@ jobs:
         run: |
           python .github/scripts/check_restart.py
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GIST_ID: ${{ secrets.BOT_GIST_ID }}
 
       - name: Restart if needed
