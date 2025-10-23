@@ -3,6 +3,7 @@ services:
     name: vigili-bot
     env: python
     plan: free
+    pythonVersion: "3.11.0"  # ⬅️ FORZA PYTHON 3.11
     buildCommand: |
       echo "🔄 Build in corso..."
       pip install -r requirements.txt
@@ -16,8 +17,5 @@ services:
       - key: GH_TOKEN
         value: "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"
       - key: GIST_ID
-        value: ""  # Lascia vuoto - il bot lo creerà automaticamente
-    autoDeploy: false  # IMPORTANTE: Disabilita auto-deploy da Git
-
-# RIMUOVI la sezione databases - non ci serve più!
-# Usiamo Gist come database
+        value: ""
+    autoDeploy: false
