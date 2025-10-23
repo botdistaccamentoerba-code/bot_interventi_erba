@@ -1,9 +1,8 @@
-name: Monthly Auto-Redeploy
-
+name: Monthly Redeploy
 on:
   schedule:
-    - cron: '5 0 1 * *'  # 1° del mese alle 00:05 UTC
-  workflow_dispatch:      # Redeploy manuale
+    - cron: '0 6 1 * *'  # 1° del mese alle 6:00
+  workflow_dispatch:      # Manuale
 
 jobs:
   redeploy:
