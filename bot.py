@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
     NEW_INTERVENTION_DRIVER, NEW_INTERVENTION_PARTICIPANTS, NEW_INTERVENTION_VEHICLES,
     SEARCH_REPORT_NUM, SEARCH_REPORT_YEAR,
     EXPORT_SELECT_YEAR
-) = range(21)
+) = range(22)
 
 class VigiliBot:
     def __init__(self, token):
