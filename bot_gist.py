@@ -765,7 +765,7 @@ def main():
         return
     
     # Aggiungi admin di default (sostituisci con il tuo ID Telegram)
-    ADMIN_ID = 123456789  # CAMBIA QUESTO!
+    ADMIN_ID = [1816045269, 653425963, 693843502]  # CAMBIA QUESTO!
     
     bot = VigiliBotCompleto(BOT_TOKEN, GH_TOKEN, GIST_ID)
     
