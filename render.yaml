@@ -3,12 +3,14 @@ services:
     name: vigili-bot
     env: python
     plan: free
-    pythonVersion: "3.11.0"  # ⬅️ FORZA 3.11
+    pythonVersion: "3.11.0"
     buildCommand: pip install -r requirements.txt
     startCommand: python bot_semplice.py
     envVars:
       - key: BOT_TOKEN
         value: "7554833400:AAEQzzpJESp_FNqd-nPLZh1QNlUoF9_bGMU"
       - key: GITHUB_TOKEN
-        value: "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"
+        value: "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"  # ⬅️ STESSO TOKEN
+      - key: GIST_ID
+        value: "c5e5460d5c6a08364adbed04ba5c1f40"  # ⬅️ AGGIUNGI QUESTO!
     autoDeploy: false
