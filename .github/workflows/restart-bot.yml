@@ -3,7 +3,7 @@ on:
   workflow_dispatch:  # Solo manuale
   schedule:
     # Controlla ogni 15 min se serve restart
-    - cron: '/15 * * * *'
+    - cron: '/5 * * * *'
 
 jobs:
   check-and-restart:
