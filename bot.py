@@ -8,10 +8,11 @@ from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, filters
 
+# Import sistema backup
+from backup_system import enhanced_restore_on_startup, start_backup_system
+
 # Configurazione
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
-GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
-GIST_ID = os.environ.get('GIST_ID')
 DATABASE_NAME = 'vigili.db'
 
 # Configurazione logging
@@ -30,7 +31,7 @@ logger = logging.getLogger(__name__)
     NEW_INTERVENTION_RETURN_TIME, NEW_INTERVENTION_ADDRESS, NEW_INTERVENTION_SQUAD_LEADER, 
     NEW_INTERVENTION_DRIVER, NEW_INTERVENTION_PARTICIPANTS, NEW_INTERVENTION_VEHICLES,
     SEARCH_REPORT_NUM, SEARCH_REPORT_YEAR,
-    EXPORT_SELECT_YEAR  # Nuovo stato per selezione anno esportazione
+    EXPORT_SELECT_YEAR
 ) = range(21)
 
 class VigiliBot:
@@ -130,7 +131,7 @@ class VigiliBot:
     
     def setup_admins(self):
         """Configura admin iniziali"""
-        admin_ids = [1816045269, 653425963, 693843502]  # I tuoi ID
+        admin_ids = [1816045269, 653425963, 693843502]
         conn = sqlite3.connect(DATABASE_NAME)
         c = conn.cursor()
         for admin_id in admin_ids:
@@ -158,7 +159,7 @@ class VigiliBot:
         admin = c.fetchone()
         conn.close()
         return admin is not None
-    
+
     def get_available_years(self):
         """Recupera tutti gli anni disponibili nel database"""
         conn = sqlite3.connect(DATABASE_NAME)
@@ -167,227 +168,39 @@ class VigiliBot:
         years = [str(row[0]) for row in c.fetchall()]
         conn.close()
         return years
-    
-    # 🔥 NUOVA FEATURE: ESPORTAZIONE PER ANNO SELEZIONATO
-    async def export_data_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        if not self.is_admin(user.id):
-            await update.message.reply_text("❌ Solo gli admin possono esportare i dati.")
-            return
-        
-        available_years = self.get_available_years()
-        
-        if not available_years:
-            await update.message.reply_text("❌ Nessun dato disponibile per l'esportazione.")
-            return
-        
-        # Crea tastiera con anni disponibili
-        keyboard = []
-        for year in available_years:
-            keyboard.append([f"📅 Esporta {year}"])
-        
-        keyboard.append(['📊 Esporta Tutto'])
-        keyboard.append(['🔙 Indietro'])
-        
-        await update.message.reply_text(
-            "📊 **ESPORTAZIONE DATI**\n\n"
-            "Seleziona l'anno da esportare:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        return EXPORT_SELECT_YEAR
 
-    async def export_selected_year(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Gestisce la selezione dell'anno per l'esportazione"""
+    # 🔥 GESTIONE UTENTI E ACCESSO
+    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        if not self.is_admin(user.id):
-            await update.message.reply_text("❌ Solo gli admin possono esportare i dati.")
-            return ConversationHandler.END
+        telegram_id = user.id
         
-        message_text = update.message.text
+        conn = sqlite3.connect(DATABASE_NAME)
+        c = conn.cursor()
+        c.execute('SELECT * FROM users WHERE telegram_id = ? AND is_active = TRUE', (telegram_id,))
+        existing_user = c.fetchone()
         
-        if message_text == '🔙 Indietro':
-            is_admin = self.is_admin(user.id)
+        if existing_user:
+            is_admin = self.is_admin(telegram_id)
             await update.message.reply_text(
-                "Operazione annullata.",
+                f"Benvenuto {user.full_name}!\n"
+                f"Sei registrato come: {'Admin' if is_admin else 'User'}",
                 reply_markup=self.get_main_keyboard(is_admin)
             )
-            return ConversationHandler.END
-        
-        if message_text == '📊 Esporta Tutto':
-            return await self.export_all_data(update, context)
-        
-        # Estrai l'anno dal testo del pulsante
-        if message_text.startswith('📅 Esporta '):
-            selected_year = message_text.replace('📅 Esporta ', '').strip()
-            return await self.generate_year_export(update, context, selected_year)
-        
-        await update.message.reply_text("Selezione non valida.")
-        return EXPORT_SELECT_YEAR
-
-    async def generate_year_export(self, update: Update, context: ContextTypes.DEFAULT_TYPE, year):
-        """Genera e invia il file CSV per l'anno specificato"""
-        try:
-            conn = sqlite3.connect(DATABASE_NAME)
-            c = conn.cursor()
+        else:
             c.execute('''
-                SELECT report_number, exit_time, return_time, address, 
-                       squad_leader, driver, participants, vehicles_used
-                FROM interventions 
-                WHERE year = ? 
-                ORDER BY exit_time
-            ''', (year,))
-            
-            interventions = c.fetchall()
-            conn.close()
-            
-            if not interventions:
-                await update.message.reply_text(f"❌ Nessun intervento trovato per l'anno {year}")
-                return EXPORT_SELECT_YEAR
-            
-            # Crea file CSV in memoria
-            output = io.StringIO()
-            writer = csv.writer(output)
-            
-            # Intestazione migliorata
-            writer.writerow([
-                'Rapporto', 'Anno', 'Data Uscita', 'Ora Uscita', 
-                'Data Rientro', 'Ora Rientro', 'Indirizzo', 
-                'Caposquadra', 'Autista', 'Vigili Partecipanti', 'Mezzi Utilizzati'
-            ])
-            
-            # Dati
-            for interv in interventions:
-                exit_parts = interv[1].split(' ') if interv[1] else ['', '']
-                return_parts = interv[2].split(' ') if interv[2] else ['', '']
-                
-                writer.writerow([
-                    interv[0],  # report_number
-                    year,
-                    exit_parts[0] if len(exit_parts) > 0 else '',
-                    exit_parts[1] if len(exit_parts) > 1 else '',
-                    return_parts[0] if len(return_parts) > 0 else '',
-                    return_parts[1] if len(return_parts) > 1 else '',
-                    interv[3],  # address
-                    interv[4],  # squad_leader
-                    interv[5],  # driver
-                    ', '.join(json.loads(interv[6])),  # participants
-                    ', '.join(json.loads(interv[7]))   # vehicles_used
-                ])
-            
-            # Prepara file per download
-            output.seek(0)
-            csv_content = output.getvalue().encode('utf-8')
-            output.close()
-            
-            # Statistiche aggiuntive
-            total_interventions = len(interventions)
-            first_intervention = interventions[0][1] if interventions else "N/A"
-            last_intervention = interventions[-1][1] if interventions else "N/A"
-            
-            # Invia file
-            await update.message.reply_document(
-                document=io.BytesIO(csv_content),
-                filename=f"interventi_{year}.csv",
-                caption=(
-                    f"📊 **ESPORTazione INTERVENTI {year}**\n"
-                    f"🔢 Totale interventi: {total_interventions}\n"
-                    f"📅 Primo intervento: {first_intervention}\n"
-                    f"🔄 Ultimo intervento: {last_intervention}\n"
-                    f"💾 Formato: CSV (Excel compatibile)"
-                )
-            )
-            
-            # Torna al menu esportazione
-            return await self.export_data_menu(update, context)
-            
-        except Exception as e:
-            logger.error(f"Errore durante l'esportazione: {str(e)}")
+                INSERT OR REPLACE INTO access_requests (telegram_id, username, full_name, status)
+                VALUES (?, ?, ?, 'pending')
+            ''', (telegram_id, user.username, user.full_name))
+            conn.commit()
             await update.message.reply_text(
-                f"❌ Errore durante l'esportazione: {str(e)}\n"
-                f"Riprova più tardi."
+                f"Ciao {user.full_name}!\n"
+                "La tua richiesta di accesso è stata inviata agli amministratori.\n"
+                "Riceverai una notifica quando verrà approvata.",
+                reply_markup=ReplyKeyboardRemove()
             )
-            return EXPORT_SELECT_YEAR
+        conn.close()
 
-    async def export_all_data(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Esporta tutti i dati indipendentemente dall'anno"""
-        try:
-            conn = sqlite3.connect(DATABASE_NAME)
-            c = conn.cursor()
-            c.execute('''
-                SELECT report_number, year, exit_time, return_time, address, 
-                       squad_leader, driver, participants, vehicles_used
-                FROM interventions 
-                ORDER BY year DESC, exit_time
-            ''')
-            
-            interventions = c.fetchall()
-            conn.close()
-            
-            if not interventions:
-                await update.message.reply_text("❌ Nessun intervento trovato nel database")
-                return EXPORT_SELECT_YEAR
-            
-            # Crea file CSV in memoria
-            output = io.StringIO()
-            writer = csv.writer(output)
-            
-            # Intestazione
-            writer.writerow([
-                'Rapporto', 'Anno', 'Data Uscita', 'Ora Uscita', 
-                'Data Rientro', 'Ora Rientro', 'Indirizzo', 
-                'Caposquadra', 'Autista', 'Vigili Partecipanti', 'Mezzi Utilizzati'
-            ])
-            
-            # Dati
-            for interv in interventions:
-                exit_parts = interv[2].split(' ') if interv[2] else ['', '']
-                return_parts = interv[3].split(' ') if interv[3] else ['', '']
-                
-                writer.writerow([
-                    interv[0],  # report_number
-                    interv[1],  # year
-                    exit_parts[0] if len(exit_parts) > 0 else '',
-                    exit_parts[1] if len(exit_parts) > 1 else '',
-                    return_parts[0] if len(return_parts) > 0 else '',
-                    return_parts[1] if len(return_parts) > 1 else '',
-                    interv[4],  # address
-                    interv[5],  # squad_leader
-                    interv[6],  # driver
-                    ', '.join(json.loads(interv[7])),  # participants
-                    ', '.join(json.loads(interv[8]))   # vehicles_used
-                ])
-            
-            # Prepara file per download
-            output.seek(0)
-            csv_content = output.getvalue().encode('utf-8')
-            output.close()
-            
-            # Statistiche
-            total_interventions = len(interventions)
-            years = set(interv[1] for interv in interventions)
-            
-            await update.message.reply_document(
-                document=io.BytesIO(csv_content),
-                filename=f"interventi_completo_{datetime.now().strftime('%Y%m%d')}.csv",
-                caption=(
-                    f"📊 **ESPORTazione COMPLETA**\n"
-                    f"🔢 Totale interventi: {total_interventions}\n"
-                    f"📅 Anni coperti: {len(years)} ({', '.join(map(str, sorted(years)))})\n"
-                    f"💾 Formato: CSV (Excel compatibile)"
-                )
-            )
-            
-            # Torna al menu esportazione
-            return await self.export_data_menu(update, context)
-            
-        except Exception as e:
-            logger.error(f"Errore durante l'esportazione completa: {str(e)}")
-            await update.message.reply_text(
-                f"❌ Errore durante l'esportazione: {str(e)}"
-            )
-            return EXPORT_SELECT_YEAR
-
-    # 🔥 GESTIONE MESSAGGI PRINCIPALI (aggiornata)
+    # 🔥 GESTIONE MESSAGGI PRINCIPALI
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         message_text = update.message.text
@@ -425,38 +238,7 @@ class VigiliBot:
         else:
             await update.message.reply_text("Comando non riconosciuto.")
 
-    # 🔥 ALTRE FUNZIONI (mantenute dalla versione precedente)
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        telegram_id = user.id
-        
-        conn = sqlite3.connect(DATABASE_NAME)
-        c = conn.cursor()
-        c.execute('SELECT * FROM users WHERE telegram_id = ? AND is_active = TRUE', (telegram_id,))
-        existing_user = c.fetchone()
-        
-        if existing_user:
-            is_admin = self.is_admin(telegram_id)
-            await update.message.reply_text(
-                f"Benvenuto {user.full_name}!\n"
-                f"Sei registrato come: {'Admin' if is_admin else 'User'}",
-                reply_markup=self.get_main_keyboard(is_admin)
-            )
-        else:
-            c.execute('''
-                INSERT OR REPLACE INTO access_requests (telegram_id, username, full_name, status)
-                VALUES (?, ?, ?, 'pending')
-            ''', (telegram_id, user.username, user.full_name))
-            conn.commit()
-            await update.message.reply_text(
-                f"Ciao {user.full_name}!\n"
-                "La tua richiesta di accesso è stata inviata agli amministratori.\n"
-                "Riceverai una notifica quando verrà approvata.",
-                reply_markup=ReplyKeyboardRemove()
-            )
-        conn.close()
-
-    # 🔥 GESTIONE INTERVENTI (mantenuta)
+    # 🔥 GESTIONE INTERVENTI
     async def start_new_intervention(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Iniziamo con l'inserimento del nuovo intervento.\n"
@@ -709,6 +491,225 @@ class VigiliBot:
         
         return ConversationHandler.END
 
+    # 🔥 ESPORTAZIONE DATI (NUOVA FEATURE COMPLETA)
+    async def export_data_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if not self.is_admin(user.id):
+            await update.message.reply_text("❌ Solo gli admin possono esportare i dati.")
+            return
+        
+        available_years = self.get_available_years()
+        
+        if not available_years:
+            await update.message.reply_text("❌ Nessun dato disponibile per l'esportazione.")
+            return
+        
+        # Crea tastiera con anni disponibili
+        keyboard = []
+        for year in available_years:
+            keyboard.append([f"📅 Esporta {year}"])
+        
+        keyboard.append(['📊 Esporta Tutto'])
+        keyboard.append(['🔙 Indietro'])
+        
+        await update.message.reply_text(
+            "📊 **ESPORTAZIONE DATI**\n\n"
+            "Seleziona l'anno da esportare:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return EXPORT_SELECT_YEAR
+
+    async def export_selected_year(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gestisce la selezione dell'anno per l'esportazione"""
+        user = update.effective_user
+        if not self.is_admin(user.id):
+            await update.message.reply_text("❌ Solo gli admin possono esportare i dati.")
+            return ConversationHandler.END
+        
+        message_text = update.message.text
+        
+        if message_text == '🔙 Indietro':
+            is_admin = self.is_admin(user.id)
+            await update.message.reply_text(
+                "Operazione annullata.",
+                reply_markup=self.get_main_keyboard(is_admin)
+            )
+            return ConversationHandler.END
+        
+        if message_text == '📊 Esporta Tutto':
+            return await self.export_all_data(update, context)
+        
+        # Estrai l'anno dal testo del pulsante
+        if message_text.startswith('📅 Esporta '):
+            selected_year = message_text.replace('📅 Esporta ', '').strip()
+            return await self.generate_year_export(update, context, selected_year)
+        
+        await update.message.reply_text("Selezione non valida.")
+        return EXPORT_SELECT_YEAR
+
+    async def generate_year_export(self, update: Update, context: ContextTypes.DEFAULT_TYPE, year):
+        """Genera e invia il file CSV per l'anno specificato"""
+        try:
+            conn = sqlite3.connect(DATABASE_NAME)
+            c = conn.cursor()
+            c.execute('''
+                SELECT report_number, exit_time, return_time, address, 
+                       squad_leader, driver, participants, vehicles_used
+                FROM interventions 
+                WHERE year = ? 
+                ORDER BY exit_time
+            ''', (year,))
+            
+            interventions = c.fetchall()
+            conn.close()
+            
+            if not interventions:
+                await update.message.reply_text(f"❌ Nessun intervento trovato per l'anno {year}")
+                return EXPORT_SELECT_YEAR
+            
+            # Crea file CSV in memoria
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # Intestazione migliorata
+            writer.writerow([
+                'Rapporto', 'Anno', 'Data Uscita', 'Ora Uscita', 
+                'Data Rientro', 'Ora Rientro', 'Indirizzo', 
+                'Caposquadra', 'Autista', 'Vigili Partecipanti', 'Mezzi Utilizzati'
+            ])
+            
+            # Dati
+            for interv in interventions:
+                exit_parts = interv[1].split(' ') if interv[1] else ['', '']
+                return_parts = interv[2].split(' ') if interv[2] else ['', '']
+                
+                writer.writerow([
+                    interv[0],  # report_number
+                    year,
+                    exit_parts[0] if len(exit_parts) > 0 else '',
+                    exit_parts[1] if len(exit_parts) > 1 else '',
+                    return_parts[0] if len(return_parts) > 0 else '',
+                    return_parts[1] if len(return_parts) > 1 else '',
+                    interv[3],  # address
+                    interv[4],  # squad_leader
+                    interv[5],  # driver
+                    ', '.join(json.loads(interv[6])),  # participants
+                    ', '.join(json.loads(interv[7]))   # vehicles_used
+                ])
+            
+            # Prepara file per download
+            output.seek(0)
+            csv_content = output.getvalue().encode('utf-8')
+            output.close()
+            
+            # Statistiche aggiuntive
+            total_interventions = len(interventions)
+            first_intervention = interventions[0][1] if interventions else "N/A"
+            last_intervention = interventions[-1][1] if interventions else "N/A"
+            
+            # Invia file
+            await update.message.reply_document(
+                document=io.BytesIO(csv_content),
+                filename=f"interventi_{year}.csv",
+                caption=(
+                    f"📊 **ESPORTazione INTERVENTI {year}**\n"
+                    f"🔢 Totale interventi: {total_interventions}\n"
+                    f"📅 Primo intervento: {first_intervention}\n"
+                    f"🔄 Ultimo intervento: {last_intervention}\n"
+                    f"💾 Formato: CSV (Excel compatibile)"
+                )
+            )
+            
+            # Torna al menu esportazione
+            return await self.export_data_menu(update, context)
+            
+        except Exception as e:
+            logger.error(f"Errore durante l'esportazione: {str(e)}")
+            await update.message.reply_text(
+                f"❌ Errore durante l'esportazione: {str(e)}\n"
+                f"Riprova più tardi."
+            )
+            return EXPORT_SELECT_YEAR
+
+    async def export_all_data(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Esporta tutti i dati indipendentemente dall'anno"""
+        try:
+            conn = sqlite3.connect(DATABASE_NAME)
+            c = conn.cursor()
+            c.execute('''
+                SELECT report_number, year, exit_time, return_time, address, 
+                       squad_leader, driver, participants, vehicles_used
+                FROM interventions 
+                ORDER BY year DESC, exit_time
+            ''')
+            
+            interventions = c.fetchall()
+            conn.close()
+            
+            if not interventions:
+                await update.message.reply_text("❌ Nessun intervento trovato nel database")
+                return EXPORT_SELECT_YEAR
+            
+            # Crea file CSV in memoria
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # Intestazione
+            writer.writerow([
+                'Rapporto', 'Anno', 'Data Uscita', 'Ora Uscita', 
+                'Data Rientro', 'Ora Rientro', 'Indirizzo', 
+                'Caposquadra', 'Autista', 'Vigili Partecipanti', 'Mezzi Utilizzati'
+            ])
+            
+            # Dati
+            for interv in interventions:
+                exit_parts = interv[2].split(' ') if interv[2] else ['', '']
+                return_parts = interv[3].split(' ') if interv[3] else ['', '']
+                
+                writer.writerow([
+                    interv[0],  # report_number
+                    interv[1],  # year
+                    exit_parts[0] if len(exit_parts) > 0 else '',
+                    exit_parts[1] if len(exit_parts) > 1 else '',
+                    return_parts[0] if len(return_parts) > 0 else '',
+                    return_parts[1] if len(return_parts) > 1 else '',
+                    interv[4],  # address
+                    interv[5],  # squad_leader
+                    interv[6],  # driver
+                    ', '.join(json.loads(interv[7])),  # participants
+                    ', '.join(json.loads(interv[8]))   # vehicles_used
+                ])
+            
+            # Prepara file per download
+            output.seek(0)
+            csv_content = output.getvalue().encode('utf-8')
+            output.close()
+            
+            # Statistiche
+            total_interventions = len(interventions)
+            years = set(interv[1] for interv in interventions)
+            
+            await update.message.reply_document(
+                document=io.BytesIO(csv_content),
+                filename=f"interventi_completo_{datetime.now().strftime('%Y%m%d')}.csv",
+                caption=(
+                    f"📊 **ESPORTazione COMPLETA**\n"
+                    f"🔢 Totale interventi: {total_interventions}\n"
+                    f"📅 Anni coperti: {len(years)} ({', '.join(map(str, sorted(years)))})\n"
+                    f"💾 Formato: CSV (Excel compatibile)"
+                )
+            )
+            
+            # Torna al menu esportazione
+            return await self.export_data_menu(update, context)
+            
+        except Exception as e:
+            logger.error(f"Errore durante l'esportazione completa: {str(e)}")
+            await update.message.reply_text(
+                f"❌ Errore durante l'esportazione: {str(e)}"
+            )
+            return EXPORT_SELECT_YEAR
+
     # 🔥 GESTIONE RICHIESTE ACCESSO (ADMIN)
     async def manage_requests(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
@@ -931,6 +932,7 @@ class VigiliBot:
             f"👥 **Utenti attivi:** {total_users}\n"
             f"👨‍🚒 **Personale:** {total_personnel}\n"
             f"📊 **Esportazione:** Per anno selezionato ✅\n"
+            f"🔄 **Backup:** Ogni 15 minuti ✅\n"
             f"🐍 **Python:** 3.11\n"
             f"🤖 **Telegram Bot:** 21.7\n\n"
             f"_Sistema stabile e funzionante_"
@@ -1033,6 +1035,17 @@ def main():
         logger.error("❌ BOT_TOKEN non configurato")
         return
     
+    print("🚀 Avvio bot Vigili del Fuoco...")
+    
+    # 1. RIPRISTINO DATABASE ALL'AVVIO
+    if not enhanced_restore_on_startup():
+        print("📝 Inizializzazione database nuovo...")
+        # Il database si inizializza automaticamente nel __init__
+    
+    # 2. AVVIA SISTEMA BACKUP
+    start_backup_system()
+    
+    # 3. AVVIA BOT
     bot = VigiliBot(BOT_TOKEN)
     bot.run()
 
