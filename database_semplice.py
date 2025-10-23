@@ -13,7 +13,7 @@ class DatabaseSemplice:
         conn = sqlite3.connect(DATABASE_NAME)
         c = conn.cursor()
         
-        # Tabella interventi (come nel bot originale)
+        # Tabella interventi - RIMOSSI COMMENTI #
         c.execute('''
             CREATE TABLE IF NOT EXISTS interventions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,8 +24,8 @@ class DatabaseSemplice:
                 address TEXT NOT NULL,
                 squad_leader TEXT NOT NULL,
                 driver TEXT NOT NULL,
-                participants TEXT NOT NULL,  # JSON come stringa
-                vehicles_used TEXT NOT NULL,  # JSON come stringa
+                participants TEXT NOT NULL,
+                vehicles_used TEXT NOT NULL,
                 created_by INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(report_number, year)
@@ -95,7 +95,7 @@ class DatabaseSemplice:
         conn.commit()
         conn.close()
     
-    # 🔥 METODI PER INTERVENTI (come nel bot originale)
+    # 🔥 METODI PER INTERVENTI 
     def add_intervention(self, report_number, year, exit_time, return_time, address, 
                         squad_leader, driver, participants, vehicles_used, created_by):
         conn = sqlite3.connect(DATABASE_NAME)
