@@ -16,5 +16,5 @@ services:
       - key: GH_TOKEN
         value: "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"
       - key: GIST_ID
-        value: ""
+        value: "c5e5460d5c6a08364adbed04ba5c1f40"
     autoDeploy: false
