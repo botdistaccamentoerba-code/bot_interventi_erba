@@ -3,7 +3,7 @@ services:
     name: vigili-bot
     env: python
     plan: free
-    pythonVersion: "3.11.0"  # ⬅️ FORZA PYTHON 3.11
+    pythonVersion: "3.11.0"  # ⬅️ FORZA 3.11
     buildCommand: pip install -r requirements.txt
     startCommand: python bot_semplice.py
     envVars:
