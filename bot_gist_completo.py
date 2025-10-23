@@ -757,8 +757,8 @@ class VigiliBotCompleto:
         asyncio.set_event_loop(loop)
         loop.create_task(self.periodic_state_save())
     
-    logger.info("🤖 Bot Vigili del Fuoco COMPLETO avviato!")
-    self.application.run_polling()
+        logger.info("🤖 Bot Vigili del Fuoco COMPLETO avviato!")
+        self.application.run_polling()
 
 def main():
     BOT_TOKEN = os.getenv('BOT_TOKEN')
