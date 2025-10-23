@@ -3,7 +3,6 @@ services:
     name: vigili-bot
     env: python
     plan: free
-    pythonVersion: "3.11.0"  # ⬅️ FORZA PYTHON 3.11
     buildCommand: |
       echo "🔄 Build in corso..."
       pip install -r requirements.txt
