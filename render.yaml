@@ -9,5 +9,5 @@ services:
       - key: BOT_TOKEN
         value: "7554833400:AAEQzzpJESp_FNqd-nPLZh1QNlUoF9_bGMU"
       - key: GITHUB_TOKEN
-        value: "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"
+        value: "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"
     autoDeploy: false
