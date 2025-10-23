@@ -751,10 +751,14 @@ class VigiliBotCompleto:
         self.setup_signal_handlers()
         self.application = Application.builder().token(self.token).build()
         self.setup_handlers()
-        asyncio.create_task(self.periodic_state_save())
+        #asyncio.create_task(self.periodic_state_save())
         
-        logger.info("🤖 Bot Vigili del Fuoco COMPLETO avviato!")
-        self.application.run_polling()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.create_task(self.periodic_state_save())
+    
+    logger.info("🤖 Bot Vigili del Fuoco COMPLETO avviato!")
+    self.application.run_polling()
 
 def main():
     BOT_TOKEN = os.getenv('BOT_TOKEN')
