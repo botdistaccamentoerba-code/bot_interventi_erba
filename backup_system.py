@@ -8,7 +8,7 @@ from datetime import datetime
 
 # Configurazione
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
-GIST_ID = os.environ.get('GIST_ID')
+GIST_ID = os.environ.get('GIST_ID', 'c5e5460d5c6a08364adbed04ba5c1f40')  # ⬅️ Default
 DATABASE_NAME = 'vigili.db'
 
 def backup_database_to_gist():
