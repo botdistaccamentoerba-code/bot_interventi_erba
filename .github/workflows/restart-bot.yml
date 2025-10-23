@@ -2,8 +2,8 @@ name: Controlled Bot Restart
 on:
   workflow_dispatch:  # Solo manuale
   schedule:
-    # Controlla ogni ora se serve restart
-    - cron: '0 * * * *'
+    # Controlla ogni 15 min se serve restart
+    - cron: '/15 * * * *'
 
 jobs:
   check-and-restart:
