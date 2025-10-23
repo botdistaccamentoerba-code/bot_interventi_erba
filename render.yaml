@@ -3,18 +3,11 @@ services:
     name: vigili-bot
     env: python
     plan: free
-    buildCommand: |
-      echo "🔄 Build in corso..."
-      pip install -r requirements.txt
-      python -c "print('✅ Build completata')"
-    startCommand: |
-      echo "🚀 Avvio Bot Vigili del Fuoco COMPLETO..."
-      python bot_gist_completo.py
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot_semplice.py
     envVars:
       - key: BOT_TOKEN
         value: "7554833400:AAEQzzpJESp_FNqd-nPLZh1QNlUoF9_bGMU"
-      - key: GH_TOKEN
+      - key: GITHUB_TOKEN
         value: "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"
-      - key: GIST_ID
-        value: "c5e5460d5c6a08364adbed04ba5c1f40"
     autoDeploy: false
