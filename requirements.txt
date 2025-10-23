@@ -1,5 +1,4 @@
-python-telegram-bot==20.7
+python-telegram-bot==21.7  # ⬅️ VERSIONE PIÙ RECENTE
 requests==2.31.0
 python-dateutil==2.8.2
-# RIMOSSO: pandas e openpyxl
 aiohttp==3.9.1
