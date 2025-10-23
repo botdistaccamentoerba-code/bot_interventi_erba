@@ -1,5 +1,6 @@
 # token bot 7554833400:AAEQzzpJESp_FNqd-nPLZh1QNlUoF9_bGMU
 # token Gist g h p _oV4hvk01nlGBxcJjync6qL98bfSgrM41Cwvx
+# gist aoìpikey rnd_gTpJu4YOgZzr5Bxqz7vw0woMEEVA 
 # bot_gist_completo.py
 import os
 import logging
