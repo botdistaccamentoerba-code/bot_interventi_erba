@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
     EXPORT_SELECT_YEAR,
     MANAGE_PERSONNEL_SELECTED, MANAGE_PERSONNEL_ACTION, UPDATE_LICENSE_CONFIRM,
     UPDATE_QUALIFICATION_CONFIRM, UPDATE_NAUTICAL_CONFIRM, UPDATE_SAF_TPSS_CONFIRM
-) = range(29)
+) = range(27)
 
 class VigiliBot:
     def __init__(self, token):
