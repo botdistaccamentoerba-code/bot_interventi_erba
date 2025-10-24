@@ -9,9 +9,12 @@ from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, filters
 
-# Import sistema backup
+# Import sistema backup e keep-alive
 from backup_system import enhanced_restore_on_startup, start_backup_system
 from keep_alive import start_keep_alive
+
+# Import dati precompilati
+from data_precompilati import PERSONALE_PRECOMPILATO, MEZZI_PRECOMPILATI, TIPOLOGIE_INTERVENTO
 
 # Configurazione
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
@@ -35,14 +38,17 @@ logger = logging.getLogger(__name__)
     SEARCH_REPORT_NUM, SEARCH_REPORT_YEAR,
     EXPORT_SELECT_YEAR,
     MANAGE_PERSONNEL_SELECTED, MANAGE_PERSONNEL_ACTION, UPDATE_LICENSE_CONFIRM,
-    UPDATE_QUALIFICATION_CONFIRM, UPDATE_NAUTICAL_CONFIRM, UPDATE_SAF_TPSS_CONFIRM
-) = range(27)
+    UPDATE_QUALIFICATION_CONFIRM, UPDATE_NAUTICAL_CONFIRM, UPDATE_SAF_TPSS_CONFIRM,
+    MODIFICA_VIGILE_SELECT, MODIFICA_CAMPO_SELECT, MODIFICA_NUOVO_VALORE,
+    NEW_INTERVENTION_REPORT_PROGRESSIVO
+) = range(33)
 
 class VigiliBot:
     def __init__(self, token):
         self.token = token
         self.application = None
         self.init_db()
+        self.carica_dati_precompilati()
     
     def init_db(self):
         """Inizializza database SQLite"""
@@ -104,6 +110,9 @@ class VigiliBot:
                 has_nautical_license BOOLEAN DEFAULT FALSE,
                 is_saf BOOLEAN DEFAULT FALSE,
                 is_tpss BOOLEAN DEFAULT FALSE,
+                squadra_notturna TEXT,
+                squadra_serale TEXT,
+                squadra_domenicale TEXT,
                 is_active BOOLEAN DEFAULT TRUE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -132,6 +141,49 @@ class VigiliBot:
         conn.commit()
         conn.close()
         logger.info("✅ Database inizializzato")
+    
+    def carica_dati_precompilati(self):
+        """Carica i dati precompilati nel database se non esistono"""
+        conn = sqlite3.connect(DATABASE_NAME)
+        c = conn.cursor()
+        
+        # Carica personale precompilato
+        c.execute('SELECT COUNT(*) FROM personnel')
+        count_personale = c.fetchone()[0]
+        
+        if count_personale == 0:
+            for vigile in PERSONALE_PRECOMPILATO:
+                c.execute('''
+                    INSERT OR IGNORE INTO personnel 
+                    (full_name, qualification, license_grade, has_nautical_license, is_saf, is_tpss, squadra_notturna, squadra_serale, squadra_domenicale)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    vigile['nome'],
+                    vigile['qualifica'],
+                    vigile['patente'],
+                    vigile['nautica'],
+                    vigile['saf'],
+                    vigile['tpss'],
+                    vigile.get('squadra_notturna', ''),
+                    vigile.get('squadra_serale', ''),
+                    vigile.get('squadra_domenicale', '')
+                ))
+            logger.info(f"✅ Caricati {len(PERSONALE_PRECOMPILATO)} vigili precompilati")
+        
+        # Carica mezzi precompilati
+        c.execute('SELECT COUNT(*) FROM vehicles')
+        count_mezzi = c.fetchone()[0]
+        
+        if count_mezzi == 0:
+            for mezzo in MEZZI_PRECOMPILATI:
+                c.execute('''
+                    INSERT OR IGNORE INTO vehicles (license_plate, model)
+                    VALUES (?, ?)
+                ''', (mezzo['targa'], mezzo['modello']))
+            logger.info(f"✅ Caricati {len(MEZZI_PRECOMPILATI)} mezzi precompilati")
+        
+        conn.commit()
+        conn.close()
     
     def setup_admins_and_users(self):
         """Configura admin e utenti automaticamente all'avvio"""
@@ -164,6 +216,7 @@ class VigiliBot:
         if is_admin:
             keyboard.append(['👥 Gestione Richieste', '➕ Aggiungi Personale'])
             keyboard.append(['✏️ Gestione Vigili', '🚗 Aggiungi Mezzo'])
+            keyboard.append(['👨‍🚒 Modifica Vigile', '⚙️ Altro'])
         return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
     def is_admin(self, user_id):
@@ -277,22 +330,100 @@ class VigiliBot:
             await self.manage_personnel(update, context)
         elif message_text == '🚗 Aggiungi Mezzo' and is_admin:
             await self.start_add_vehicle(update, context)
+        elif message_text == '👨‍🚒 Modifica Vigile' and is_admin:
+            await self.modifica_vigile_start(update, context)
+        elif message_text == '⚙️ Altro' and is_admin:
+            await self.menu_altro(update, context)
         else:
             await update.message.reply_text("Comando non riconosciuto.")
 
-    # 🔥 GESTIONE INTERVENTI CON TIPOLOGIA
-    async def start_new_intervention(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def menu_altro(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Menu funzioni aggiuntive per admin"""
+        keyboard = [
+            ['📋 Lista Vigili Completa', '🚗 Lista Mezzi Completa'],
+            ['🔄 Ricarica Dati Precompilati', '🔙 Indietro']
+        ]
+        
         await update.message.reply_text(
-            "Iniziamo con l'inserimento del nuovo intervento.\n"
+            "⚙️ **MENU FUNZIONI AGGIUNTIVE**\n\n"
+            "Seleziona un'opzione:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+
+    # 🔥 GESTIONE INTERVENTI CON TIPOLOGIA MIGLIORATA
+    async def start_new_intervention(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # Pulsanti per progressivo o nuovo
+        keyboard = [
+            ['🔄 Progressivo', '📝 Nuovo Rapporto'],
+            ['🔙 Indietro']
+        ]
+        
+        await update.message.reply_text(
+            "📋 **NUOVO INTERVENTO**\n\n"
+            "Vuoi continuare da un rapporto precedente o crearne uno nuovo?",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return NEW_INTERVENTION_REPORT_NUM
+
+    async def new_intervention_report_num(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == '🔙 Indietro':
+            return await self.cancel(update, context)
+        
+        if update.message.text == '🔄 Progressivo':
+            # Recupera ultimi 4 interventi
+            conn = sqlite3.connect(DATABASE_NAME)
+            c = conn.cursor()
+            c.execute('''
+                SELECT report_number, year FROM interventions 
+                ORDER BY created_at DESC LIMIT 4
+            ''')
+            ultimi_interventi = c.fetchall()
+            conn.close()
+            
+            if ultimi_interventi:
+                keyboard = []
+                for rapporto, anno in ultimi_interventi:
+                    keyboard.append([f"📋 {rapporto}/{anno} → {int(rapporto)+1}/{anno}"])
+                keyboard.append(['🔙 Nuovo Rapporto'])
+                
+                await update.message.reply_text(
+                    "🔄 **SELEZIONA RAPPORTO PRECEDENTE**\n\n"
+                    "Scegli da quale rapporto continuare:",
+                    reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                )
+                return NEW_INTERVENTION_REPORT_PROGRESSIVO
+            else:
+                await update.message.reply_text("❌ Nessun intervento precedente trovato.")
+        
+        await update.message.reply_text(
             "Inserisci il numero del rapporto:",
             reply_markup=ReplyKeyboardRemove()
         )
         return NEW_INTERVENTION_REPORT_NUM
 
-    async def new_intervention_report_num(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        context.user_data['report_number'] = update.message.text
-        await update.message.reply_text("Inserisci l'anno del rapporto:")
-        return NEW_INTERVENTION_YEAR
+    async def new_intervention_report_progressivo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == '🔙 Nuovo Rapporto':
+            await update.message.reply_text("Inserisci il numero del rapporto:")
+            return NEW_INTERVENTION_REPORT_NUM
+        
+        # Estrai il rapporto precedente e calcola il progressivo
+        testo = update.message.text
+        parti = testo.split(' → ')
+        if len(parti) == 2:
+            rapporto_progressivo = parti[1]
+            rapporto_num, anno = rapporto_progressivo.split('/')
+            context.user_data['report_number'] = rapporto_num
+            context.user_data['year'] = anno
+            
+            await update.message.reply_text(
+                f"✅ Progressivo impostato: {rapporto_num}/{anno}\n\n"
+                f"Inserisci data e ora di uscita (formato: GG/MM/AAAA HH:MM):",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            return NEW_INTERVENTION_EXIT_TIME
+        
+        await update.message.reply_text("Inserisci il numero del rapporto:")
+        return NEW_INTERVENTION_REPORT_NUM
 
     async def new_intervention_year(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['year'] = update.message.text
@@ -312,9 +443,11 @@ class VigiliBot:
     async def new_intervention_address(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['address'] = update.message.text
         
-        # Selezione tipologia intervento
-        intervention_types = ["🔥 Incendio", "🚗 Incidente", "🆘 Soccorso Tecnico", "🎯 Esercitazione", "📋 Altro"]
-        keyboard = [[typ] for typ in intervention_types]
+        # Selezione tipologia intervento con lista precompilata + "Altro"
+        keyboard = []
+        for tipologia in TIPOLOGIE_INTERVENTO:
+            keyboard.append([tipologia])
+        keyboard.append(['📝 Altra Tipologia'])
         keyboard.append(['Annulla'])
         
         await update.message.reply_text(
@@ -327,7 +460,19 @@ class VigiliBot:
         if update.message.text == 'Annulla':
             return await self.cancel(update, context)
         
-        context.user_data['intervention_type'] = update.message.text
+        if update.message.text == '📝 Altra Tipologia':
+            await update.message.reply_text(
+                "Inserisci la nuova tipologia di intervento:",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            context.user_data['awaiting_custom_type'] = True
+            return NEW_INTERVENTION_TYPE
+        
+        if context.user_data.get('awaiting_custom_type'):
+            context.user_data['intervention_type'] = update.message.text
+            context.user_data['awaiting_custom_type'] = False
+        else:
+            context.user_data['intervention_type'] = update.message.text
         
         # Continua con selezione caposquadra
         conn = sqlite3.connect(DATABASE_NAME)
@@ -690,8 +835,152 @@ class VigiliBot:
         
         await update.message.reply_text(response)
 
-    # 🔥 GESTIONE VIGILI - MODIFICA STATO (mantieni tutto il codice esistente)
-    # ... [IL RESTO DEL CODICE RIMANE IDENTICO] ...
+    # 🔥 MODIFICA VIGILE CON SELEZIONE INTERATTIVA
+    async def modifica_vigile_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Avvia modifica informazioni vigile"""
+        conn = sqlite3.connect(DATABASE_NAME)
+        c = conn.cursor()
+        c.execute('SELECT id, full_name FROM personnel WHERE is_active = TRUE ORDER BY full_name')
+        vigili = c.fetchall()
+        conn.close()
+        
+        keyboard = [[f"👤 {vigile[1]}"] for vigile in vigili]
+        keyboard.append(['🔙 Indietro'])
+        
+        await update.message.reply_text(
+            "👥 **MODIFICA VIGILE**\n\nSeleziona il vigile da modificare:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return MODIFICA_VIGILE_SELECT
+
+    async def modifica_vigile_selected(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == '🔙 Indietro':
+            return await self.cancel(update, context)
+        
+        vigile_nome = update.message.text.replace('👤 ', '')
+        context.user_data['vigile_modifica'] = vigile_nome
+        
+        # Recupera info attuali del vigile
+        conn = sqlite3.connect(DATABASE_NAME)
+        c = conn.cursor()
+        c.execute('''
+            SELECT qualification, license_grade, has_nautical_license, is_saf, is_tpss,
+                   squadra_notturna, squadra_serale, squadra_domenicale
+            FROM personnel WHERE full_name = ?
+        ''', (vigile_nome,))
+        info_vigile = c.fetchone()
+        conn.close()
+        
+        qualifica, patente, nautica, saf, tpss, sq_notte, sq_sera, sq_dom = info_vigile
+        
+        # Mostra campi modificabili
+        keyboard = [
+            ['🎓 Qualifica', '📜 Patente'],
+            ['🚢 Nautica', '🛡️ SAF/TPSS'],
+            ['🌙 Squadra Notturna', '🌆 Squadra Serale'],
+            ['📅 Squadra Domenicale', '🔙 Indietro']
+        ]
+        
+        status_info = (
+            f"🎓 Qualifica: {qualifica}\n"
+            f"📜 Patente: {patente}\n"
+            f"🚢 Nautica: {'Sì' if nautica else 'No'}\n"
+            f"🛡️ SAF: {'Sì' if saf else 'No'}\n"
+            f"🛡️ TPSS: {'Sì' if tpss else 'No'}\n"
+            f"🌙 Squadra Notturna: {sq_notte or 'Non impostata'}\n"
+            f"🌆 Squadra Serale: {sq_sera or 'Non impostata'}\n"
+            f"📅 Squadra Domenicale: {sq_dom or 'Non impostata'}"
+        )
+        
+        await update.message.reply_text(
+            f"✏️ **MODIFICA: {vigile_nome}**\n\n{status_info}\n\nSeleziona cosa modificare:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return MODIFICA_CAMPO_SELECT
+
+    async def modifica_campo_selected(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == '🔙 Indietro':
+            return await self.modifica_vigile_start(update, context)
+        
+        campo = update.message.text
+        context.user_data['campo_modifica'] = campo
+        
+        if campo == '🎓 Qualifica':
+            keyboard = [['VV', 'CSV'], ['🔙 Indietro']]
+            await update.message.reply_text(
+                "Seleziona la nuova qualifica:",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            )
+        elif campo == '📜 Patente':
+            keyboard = [['IIIE', 'III'], ['II', 'I'], ['🔙 Indietro']]
+            await update.message.reply_text(
+                "Seleziona la nuova patente:",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            )
+        elif campo == '🚢 Nautica':
+            keyboard = [['✅ Attiva', '❌ Disattiva'], ['🔙 Indietro']]
+            await update.message.reply_text(
+                "Gestisci patente nautica:",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            )
+        elif campo == '🛡️ SAF/TPSS':
+            keyboard = [['✅ SAF', '❌ SAF'], ['✅ TPSS', '❌ TPSS'], ['🔙 Indietro']]
+            await update.message.reply_text(
+                "Gestisci SAF/TPSS:",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            )
+        else:
+            # Per le squadre, richiedi inserimento testo
+            await update.message.reply_text(
+                f"Inserisci il nuovo valore per {campo.lower()}:",
+                reply_markup=ReplyKeyboardRemove()
+            )
+        
+        return MODIFICA_NUOVO_VALORE
+
+    async def modifica_nuovo_valore(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == '🔙 Indietro':
+            return await self.modifica_vigile_selected(update, context)
+        
+        vigile_nome = context.user_data['vigile_modifica']
+        campo = context.user_data['campo_modifica']
+        nuovo_valore = update.message.text
+        
+        conn = sqlite3.connect(DATABASE_NAME)
+        c = conn.cursor()
+        
+        # Mappa campi ai nomi colonna
+        mappa_campi = {
+            '🎓 Qualifica': 'qualification',
+            '📜 Patente': 'license_grade',
+            '🌙 Squadra Notturna': 'squadra_notturna',
+            '🌆 Squadra Serale': 'squadra_serale',
+            '📅 Squadra Domenicale': 'squadra_domenicale'
+        }
+        
+        if campo in mappa_campi:
+            colonna = mappa_campi[campo]
+            c.execute(f'UPDATE personnel SET {colonna} = ? WHERE full_name = ?', (nuovo_valore, vigile_nome))
+        elif campo == '🚢 Nautica':
+            nautica = nuovo_valore == '✅ Attiva'
+            c.execute('UPDATE personnel SET has_nautical_license = ? WHERE full_name = ?', (nautica, vigile_nome))
+        elif campo == '🛡️ SAF/TPSS':
+            if nuovo_valore in ['✅ SAF', '❌ SAF']:
+                saf = nuovo_valore == '✅ SAF'
+                c.execute('UPDATE personnel SET is_saf = ? WHERE full_name = ?', (saf, vigile_nome))
+            else:
+                tpss = nuovo_valore == '✅ TPSS'
+                c.execute('UPDATE personnel SET is_tpss = ? WHERE full_name = ?', (tpss, vigile_nome))
+        
+        conn.commit()
+        conn.close()
+        
+        is_admin = self.is_admin(update.effective_user.id)
+        await update.message.reply_text(
+            f"✅ **{campo} aggiornato per {vigile_nome}!**",
+            reply_markup=self.get_main_keyboard(is_admin)
+        )
+        return ConversationHandler.END
 
     # 🔥 RICERCA RAPPORTO
     async def search_report_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1004,7 +1293,7 @@ class VigiliBot:
         
         data = query.data
         user_id = query.from_user.id
-        
+
         if not self.is_admin(user_id):
             await query.edit_message_text("❌ Non hai i permessi per questa azione.")
             return
@@ -1132,7 +1421,7 @@ class VigiliBot:
         )
         return ConversationHandler.END
 
-    # 🔥 GESTIONE VIGILI - MODIFICA STATO
+    # 🔥 GESTIONE VIGILI - MODIFICA STATO (mantenuto per compatibilità)
     async def manage_personnel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Menu per modificare lo stato del personale"""
         user = update.effective_user
@@ -1204,7 +1493,7 @@ class VigiliBot:
 
     async def manage_personnel_action(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message.text == '🔙 Indietro':
-            return await self.manage_personnel(update, context)
+            return await self.manage_personnel_selected(update, context)
         
         action = update.message.text
         person_name = context.user_data['editing_person']
@@ -1434,17 +1723,20 @@ class VigiliBot:
 
     def setup_handlers(self):
         """Setup di tutti gli handler"""
+        print("🔧 Configurazione handler in corso...")
+        
         # Handler base
         self.application.add_handler(CommandHandler("start", self.start))
         self.application.add_handler(CommandHandler("health", self.health_check))
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_handler(CallbackQueryHandler(self.handle_callback))
 
-        # Conversazione nuovo intervento CON TIPOLOGIA
+        # Conversazione nuovo intervento CON TIPOLOGIA MIGLIORATA
         intervention_conv = ConversationHandler(
             entry_points=[MessageHandler(filters.Regex('^📋 Nuovo Intervento$'), self.start_new_intervention)],
             states={
                 NEW_INTERVENTION_REPORT_NUM: [MessageHandler(filters.TEXT, self.new_intervention_report_num)],
+                NEW_INTERVENTION_REPORT_PROGRESSIVO: [MessageHandler(filters.TEXT, self.new_intervention_report_progressivo)],
                 NEW_INTERVENTION_YEAR: [MessageHandler(filters.TEXT, self.new_intervention_year)],
                 NEW_INTERVENTION_EXIT_TIME: [MessageHandler(filters.TEXT, self.new_intervention_exit_time)],
                 NEW_INTERVENTION_RETURN_TIME: [MessageHandler(filters.TEXT, self.new_intervention_return_time)],
@@ -1458,6 +1750,18 @@ class VigiliBot:
             fallbacks=[CommandHandler('cancel', self.cancel)]
         )
         self.application.add_handler(intervention_conv)
+
+        # Conversazione modifica vigile
+        modifica_vigile_conv = ConversationHandler(
+            entry_points=[MessageHandler(filters.Regex('^👨‍🚒 Modifica Vigile$'), self.modifica_vigile_start)],
+            states={
+                MODIFICA_VIGILE_SELECT: [MessageHandler(filters.TEXT, self.modifica_vigile_selected)],
+                MODIFICA_CAMPO_SELECT: [MessageHandler(filters.TEXT, self.modifica_campo_selected)],
+                MODIFICA_NUOVO_VALORE: [MessageHandler(filters.TEXT, self.modifica_nuovo_valore)],
+            },
+            fallbacks=[CommandHandler('cancel', self.cancel)]
+        )
+        self.application.add_handler(modifica_vigile_conv)
 
         # Conversazione ricerca rapporto
         search_conv = ConversationHandler(
@@ -1521,12 +1825,34 @@ class VigiliBot:
         )
         self.application.add_handler(vehicle_conv)
 
+        print(f"✅ {len(self.application.handlers)} gruppi di handler configurati")
+
     def run(self):
-        """Avvia il bot"""
+        """Avvia il bot CORRETTO"""
         self.application = Application.builder().token(self.token).build()
+        
+        # ✅ IMPOSTA HANDLER PRIMA del run_polling/run_webhook
         self.setup_handlers()
+        
         logger.info("🤖 Bot Vigili del Fuoco avviato con TIPOLOGIA INTERVENTI!")
-        self.application.run_polling()
+        
+        # Configura webhook o polling DOPO gli handler
+        RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
+        
+        if RENDER_URL:
+            # Webhook per Render
+            self.application.run_webhook(
+                listen="0.0.0.0",
+                port=5000,
+                url_path=self.token,
+                webhook_url=f"{RENDER_URL}/{self.token}",
+                secret_token='VIGILI_BOT_SECRET'
+            )
+            print("🌐 Bot avviato in modalità WEBHOOK")
+        else:
+            # Fallback a polling per sviluppo
+            self.application.run_polling()
+            print("🔍 Bot avviato in modalità POLLING")
 
 def main():
     BOT_TOKEN = os.environ.get('BOT_TOKEN')
@@ -1545,29 +1871,15 @@ def main():
     if not enhanced_restore_on_startup():
         print("📝 Inizializzazione database nuovo...")
     
-    # 3. CONFIGURA ADMIN
+    # 3. CONFIGURA ADMIN E AVVIA BOT
     bot = VigiliBot(BOT_TOKEN)
     bot.setup_admins_and_users()
     
     # 4. AVVIA BACKUP
     start_backup_system()
     
-    # 5. CONFIGURA WEBHOOK (SOLUZIONE DEFINITIVA)
-    if RENDER_URL:
-        # Webhook per Render - MOLTO più stabile
-        app = bot.application
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=5000,
-            url_path=BOT_TOKEN,
-            webhook_url=f"{RENDER_URL}/{BOT_TOKEN}",
-            secret_token='VIGILI_BOT_SECRET'
-        )
-        print("🌐 Bot avviato in modalità WEBHOOK")
-    else:
-        # Fallback a polling per sviluppo
-        bot.application.run_polling()
-        print("🔍 Bot avviato in modalità POLLING")
+    # 5. AVVIA IL BOT (gli handler sono già configurati nel costruttore)
+    bot.run()
 
 if __name__ == "__main__":
     main()
