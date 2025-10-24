@@ -1,12 +1,15 @@
 from flask import Flask
 import threading
-import time
 
 app = Flask(__name__)
 
 @app.route('/')
 def home():
     return "🤖 Bot Vigili del Fuoco - Online"
+
+@app.route('/health')
+def health():
+    return "✅ OK"
 
 def run_flask():
     app.run(host='0.0.0.0', port=5000)
