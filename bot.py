@@ -806,9 +806,10 @@ class VigiliBot:
             conn.close()
             await query.edit_message_text(f"❌ Richiesta rifiutata.")
 
+
     # 🔥 GESTIONE PERSONALE (ADMIN)
     async def start_add_personnel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        qualifications = ["VVF", "Volontario", "Amministrativo"]
+        qualifications = ["VV", "CSV"]
         keyboard = [[q] for q in qualifications]
         keyboard.append(['Annulla'])
         
@@ -829,7 +830,7 @@ class VigiliBot:
     async def add_personnel_name(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['full_name'] = update.message.text
         
-        license_grades = ["A", "B", "C", "D", "BE", "CE", "DE", "Nessuna"]
+        license_grades = ["IIIE", "III", "II", "I"]
         keyboard = [[grade] for grade in license_grades]
         keyboard.append(['Annulla'])
         
@@ -908,17 +909,18 @@ class VigiliBot:
             "✅ Personale aggiunto con successo!",
             reply_markup=self.get_main_keyboard(is_admin)
         )
-        return ConversationHandler.END
+        return ConversationHandler.END    
 
     # 🔥 GESTIONE MEZZI (ADMIN)
     async def start_add_vehicle(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text(
-            "Inserisci la targa del mezzo:",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return ADD_VEHICLE_PLATE
+    await update.message.reply_text(
+        "Inserisci la targa del mezzo:",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return ADD_VEHICLE_PLATE
 
     async def add_vehicle_plate(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # Salva la targa
         context.user_data['license_plate'] = update.message.text
         await update.message.reply_text("Inserisci il modello del mezzo:")
         return ADD_VEHICLE_MODEL
@@ -926,21 +928,21 @@ class VigiliBot:
     async def add_vehicle_model(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         model = update.message.text
         license_plate = context.user_data['license_plate']
-        
+    
         # Salva il mezzo
         conn = sqlite3.connect(DATABASE_NAME)
         c = conn.cursor()
-        c.execute('INSERT INTO vehicles (license_plate, model) VALUES (?, ?)', (license_plate, model))
+        c.execute('INSERT OR IGNORE INTO vehicles (license_plate, model) VALUES (?, ?)', (license_plate, model))
         conn.commit()
         conn.close()
-        
+    
         user = update.effective_user
         is_admin = self.is_admin(user.id)
-        await update.message.reply_text(
-            f"✅ Mezzo {license_plate} aggiunto con successo!",
-            reply_markup=self.get_main_keyboard(is_admin)
-        )
-        return ConversationHandler.END
+    await update.message.reply_text(
+        f"✅ Mezzo {license_plate} aggiunto con successo!",
+        reply_markup=self.get_main_keyboard(is_admin)
+    )
+    return ConversationHandler.END
 
     # 🔥 HEALTH CHECK
     async def health_check(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1073,18 +1075,22 @@ def main():
     
     print("🚀 Avvio bot Vigili del Fuoco...")
     
-    # 1. RIPRISTINO DATABASE ALL'AVVIO
+    # 1. AVVIA KEEP-ALIVE (per Render Web Service)
+    from keep_alive import start_keep_alive
+    start_keep_alive()
+    
+    # 2. RIPRISTINO DATABASE ALL'AVVIO
     if not enhanced_restore_on_startup():
         print("📝 Inizializzazione database nuovo...")
     
-    # 2. CONFIGURA ADMIN AUTOMATICA
+    # 3. CONFIGURA ADMIN AUTOMATICA
     bot = VigiliBot(BOT_TOKEN)
-    bot.setup_admins_and_users()  # 👈 NUOVA FUNZIONE
+    bot.setup_admins_and_users()
     
-    # 3. AVVIA SISTEMA BACKUP
+    # 4. AVVIA SISTEMA BACKUP
     start_backup_system()
     
-    # 4. AVVIA BOT
+    # 5. AVVIA BOT
     bot.run()
 
 if __name__ == "__main__":
