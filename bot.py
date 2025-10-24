@@ -30,13 +30,13 @@ logger = logging.getLogger(__name__)
     ADD_PERSONNEL_NAUTICAL, ADD_PERSONNEL_SAF, ADD_PERSONNEL_TPSS,
     ADD_VEHICLE_PLATE, ADD_VEHICLE_MODEL,
     NEW_INTERVENTION_REPORT_NUM, NEW_INTERVENTION_YEAR, NEW_INTERVENTION_EXIT_TIME, 
-    NEW_INTERVENTION_RETURN_TIME, NEW_INTERVENTION_ADDRESS, NEW_INTERVENTION_SQUAD_LEADER, 
-    NEW_INTERVENTION_DRIVER, NEW_INTERVENTION_PARTICIPANTS, NEW_INTERVENTION_VEHICLES,
+    NEW_INTERVENTION_RETURN_TIME, NEW_INTERVENTION_ADDRESS, NEW_INTERVENTION_TYPE,
+    NEW_INTERVENTION_SQUAD_LEADER, NEW_INTERVENTION_DRIVER, NEW_INTERVENTION_PARTICIPANTS, NEW_INTERVENTION_VEHICLES,
     SEARCH_REPORT_NUM, SEARCH_REPORT_YEAR,
     EXPORT_SELECT_YEAR,
     MANAGE_PERSONNEL_SELECTED, MANAGE_PERSONNEL_ACTION, UPDATE_LICENSE_CONFIRM,
     UPDATE_QUALIFICATION_CONFIRM, UPDATE_NAUTICAL_CONFIRM, UPDATE_SAF_TPSS_CONFIRM
-) = range(26)
+) = range(29)
 
 class VigiliBot:
     def __init__(self, token):
@@ -49,7 +49,7 @@ class VigiliBot:
         conn = sqlite3.connect(DATABASE_NAME)
         c = conn.cursor()
         
-        # Tabella interventi
+        # Tabella interventi CON TIPOLOGIA
         c.execute('''
             CREATE TABLE IF NOT EXISTS interventions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,6 +58,7 @@ class VigiliBot:
                 exit_time TEXT NOT NULL,
                 return_time TEXT,
                 address TEXT NOT NULL,
+                intervention_type TEXT DEFAULT 'Incendio',
                 squad_leader TEXT NOT NULL,
                 driver TEXT NOT NULL,
                 participants TEXT NOT NULL,
@@ -279,7 +280,7 @@ class VigiliBot:
         else:
             await update.message.reply_text("Comando non riconosciuto.")
 
-    # 🔥 GESTIONE INTERVENTI CON TASTIERE INTERATTIVE
+    # 🔥 GESTIONE INTERVENTI CON TIPOLOGIA
     async def start_new_intervention(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Iniziamo con l'inserimento del nuovo intervento.\n"
@@ -311,6 +312,24 @@ class VigiliBot:
     async def new_intervention_address(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['address'] = update.message.text
         
+        # Selezione tipologia intervento
+        intervention_types = ["🔥 Incendio", "🚗 Incidente", "🆘 Soccorso Tecnico", "🎯 Esercitazione", "📋 Altro"]
+        keyboard = [[typ] for typ in intervention_types]
+        keyboard.append(['Annulla'])
+        
+        await update.message.reply_text(
+            "🔥 **SELEZIONA TIPOLOGIA INTERVENTO**",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return NEW_INTERVENTION_TYPE
+
+    async def new_intervention_type(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == 'Annulla':
+            return await self.cancel(update, context)
+        
+        context.user_data['intervention_type'] = update.message.text
+        
+        # Continua con selezione caposquadra
         conn = sqlite3.connect(DATABASE_NAME)
         c = conn.cursor()
         c.execute('SELECT * FROM personnel WHERE is_active = TRUE')
@@ -324,9 +343,10 @@ class VigiliBot:
                 "👨‍🚒 **SELEZIONA IL CAPOSQUADRA**",
                 reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             )
+            return NEW_INTERVENTION_SQUAD_LEADER
         else:
             await update.message.reply_text("Inserisci il nome del caposquadra:")
-        return NEW_INTERVENTION_SQUAD_LEADER
+            return NEW_INTERVENTION_SQUAD_LEADER
 
     async def new_intervention_squad_leader(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message.text == 'Annulla':
@@ -538,21 +558,22 @@ class VigiliBot:
         else:
             vehicles = [v.strip() for v in update.message.text.split(',')]
         
-        # Salva l'intervento
+        # Salva l'intervento CON TIPOLOGIA
         user = update.effective_user
         conn = sqlite3.connect(DATABASE_NAME)
         c = conn.cursor()
         c.execute('''
             INSERT INTO interventions 
-            (report_number, year, exit_time, return_time, address, squad_leader, 
-             driver, participants, vehicles_used, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (report_number, year, exit_time, return_time, address, intervention_type,
+             squad_leader, driver, participants, vehicles_used, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             context.user_data['report_number'],
             context.user_data['year'],
             context.user_data['exit_time'],
             context.user_data['return_time'],
             context.user_data['address'],
+            context.user_data.get('intervention_type', 'Incendio'),
             context.user_data['squad_leader'],
             context.user_data['driver'],
             json.dumps(context.user_data['participants']),
@@ -564,7 +585,549 @@ class VigiliBot:
         
         is_admin = self.is_admin(user.id)
         await update.message.reply_text(
-            "✅ **INTERVENTO REGISTRATO CON SUCCESSO!**",
+            "✅ **INTERVENTO REGISTRATO CON SUCCESSO!**\n\n"
+            f"📋 Rapporto: {context.user_data['report_number']}/{context.user_data['year']}\n"
+            f"🔥 Tipologia: {context.user_data.get('intervention_type', 'Incendio')}\n"
+            f"📍 Indirizzo: {context.user_data['address']}",
+            reply_markup=self.get_main_keyboard(is_admin)
+        )
+        return ConversationHandler.END
+
+    # 🔥 VISUALIZZAZIONE INTERVENTI
+    async def show_last_interventions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        conn = sqlite3.connect(DATABASE_NAME)
+        c = conn.cursor()
+        c.execute('''
+            SELECT report_number, year, exit_time, return_time, address, 
+                   intervention_type, squad_leader, driver, vehicles_used
+            FROM interventions 
+            ORDER BY created_at DESC 
+            LIMIT 10
+        ''')
+        interventions = c.fetchall()
+        conn.close()
+        
+        if not interventions:
+            await update.message.reply_text("Nessun intervento registrato.")
+            return
+        
+        response = "📊 **ULTIMI 10 INTERVENTI**\n\n"
+        for i, interv in enumerate(interventions, 1):
+            response += (
+                f"**{i}. Rapporto {interv[0]}/{interv[1]}**\n"
+                f"🔥 {interv[5]}\n"
+                f"📍 {interv[4]}\n"
+                f"🚨 Uscita: {interv[2]}\n"
+                f"✅ Rientro: {interv[3]}\n"
+                f"👨‍🚒 Caposquadra: {interv[6]}\n"
+                f"🚗 Autista: {interv[7]}\n"
+                f"🚒 Mezzi: {', '.join(json.loads(interv[8]))}\n\n"
+            )
+        
+        await update.message.reply_text(response)
+
+    # 🔥 STATISTICHE AVANZATE CON TIPOLOGIA
+    async def show_statistics(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        conn = sqlite3.connect(DATABASE_NAME)
+        c = conn.cursor()
+        
+        # Statistiche base
+        c.execute('SELECT COUNT(*) FROM interventions')
+        total_interventions = c.fetchone()[0]
+        
+        c.execute('SELECT MIN(exit_time), MAX(exit_time) FROM interventions')
+        date_range = c.fetchone()
+        
+        c.execute('SELECT COUNT(DISTINCT year) FROM interventions')
+        years_count = c.fetchone()[0]
+        
+        c.execute('SELECT DISTINCT year FROM interventions ORDER BY year')
+        years = [str(row[0]) for row in c.fetchall()]
+        
+        # Statistiche per tipologia (NUOVE)
+        c.execute('''
+            SELECT intervention_type, COUNT(*) as count 
+            FROM interventions 
+            GROUP BY intervention_type 
+            ORDER BY count DESC
+        ''')
+        type_stats = c.fetchall()
+        
+        # Statistiche mezzi più utilizzati
+        c.execute('''
+            SELECT vehicles_used, COUNT(*) as count
+            FROM interventions
+            GROUP BY vehicles_used
+            ORDER BY count DESC
+            LIMIT 5
+        ''')
+        vehicle_stats = c.fetchall()
+        
+        conn.close()
+        
+        response = (
+            f"📈 **STATISTICHE INTERVENTI**\n\n"
+            f"🔢 Totale interventi: {total_interventions}\n"
+            f"📅 Anni registrati: {years_count} ({', '.join(years)})\n"
+            f"🚨 Primo intervento: {date_range[0] if date_range[0] else 'N/A'}\n"
+            f"✅ Ultimo intervento: {date_range[1] if date_range[1] else 'N/A'}\n\n"
+        )
+        
+        # Aggiungi statistiche tipologie
+        if type_stats and total_interventions > 0:
+            response += "🔥 **TIPOLOGIE INTERVENTI**\n"
+            for typ, count in type_stats:
+                percentage = (count / total_interventions) * 100
+                response += f"• {typ}: {count} ({percentage:.1f}%)\n"
+            response += "\n"
+        
+        # Aggiungi statistiche mezzi
+        if vehicle_stats:
+            response += "🚒 **MEZZI PIÙ UTILIZZATI**\n"
+            for vehicles, count in vehicle_stats:
+                vehicle_list = ', '.join(json.loads(vehicles))
+                response += f"• {vehicle_list}: {count} interventi\n"
+        
+        await update.message.reply_text(response)
+
+    # 🔥 GESTIONE VIGILI - MODIFICA STATO (mantieni tutto il codice esistente)
+    # ... [IL RESTO DEL CODICE RIMANE IDENTICO] ...
+
+    # 🔥 RICERCA RAPPORTO
+    async def search_report_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.message.reply_text(
+            "Inserisci il numero del rapporto da cercare:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return SEARCH_REPORT_NUM
+
+    async def search_report_num(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        context.user_data['search_report_num'] = update.message.text
+        await update.message.reply_text("Inserisci l'anno del rapporto:")
+        return SEARCH_REPORT_YEAR
+
+    async def search_report_year(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        report_num = context.user_data['search_report_num']
+        year = update.message.text
+        
+        conn = sqlite3.connect(DATABASE_NAME)
+        c = conn.cursor()
+        c.execute('''
+            SELECT report_number, year, exit_time, return_time, address, 
+                   intervention_type, squad_leader, driver, vehicles_used, participants
+            FROM interventions 
+            WHERE report_number = ? AND year = ?
+        ''', (report_num, year))
+        
+        intervention = c.fetchone()
+        conn.close()
+        
+        user = update.effective_user
+        is_admin = self.is_admin(user.id)
+        
+        if intervention:
+            response = (
+                f"🔍 **RAPPORTO TROVATO**\n\n"
+                f"📋 Rapporto: {intervention[0]}/{intervention[1]}\n"
+                f"🔥 Tipologia: {intervention[5]}\n"
+                f"📍 Indirizzo: {intervention[4]}\n"
+                f"🚨 Uscita: {intervention[2]}\n"
+                f"✅ Rientro: {intervention[3]}\n"
+                f"👨‍🚒 Caposquadra: {intervention[6]}\n"
+                f"🚗 Autista: {intervention[7]}\n"
+                f"🚒 Mezzi: {', '.join(json.loads(intervention[8]))}\n"
+            )
+            
+            if is_admin:
+                response += f"👥 Partecipanti: {', '.join(json.loads(intervention[9]))}\n"
+            
+            await update.message.reply_text(response)
+        else:
+            await update.message.reply_text("❌ Rapporto non trovato.")
+        
+        return ConversationHandler.END
+
+    # 🔥 ESPORTAZIONE DATI
+    async def export_data_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if not self.is_admin(user.id):
+            await update.message.reply_text("❌ Solo gli admin possono esportare i dati.")
+            return
+        
+        available_years = self.get_available_years()
+        
+        if not available_years:
+            await update.message.reply_text("❌ Nessun dato disponibile per l'esportazione.")
+            return
+        
+        # Crea tastiera con anni disponibili
+        keyboard = []
+        for year in available_years:
+            keyboard.append([f"📅 Esporta {year}"])
+        
+        keyboard.append(['📊 Esporta Tutto'])
+        keyboard.append(['🔙 Indietro'])
+        
+        await update.message.reply_text(
+            "📊 **ESPORTAZIONE DATI**\n\n"
+            "Seleziona l'anno da esportare:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return EXPORT_SELECT_YEAR
+
+    async def export_selected_year(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Gestisce la selezione dell'anno per l'esportazione"""
+        user = update.effective_user
+        if not self.is_admin(user.id):
+            await update.message.reply_text("❌ Solo gli admin possono esportare i dati.")
+            return ConversationHandler.END
+        
+        message_text = update.message.text
+        
+        if message_text == '🔙 Indietro':
+            is_admin = self.is_admin(user.id)
+            await update.message.reply_text(
+                "Operazione annullata.",
+                reply_markup=self.get_main_keyboard(is_admin)
+            )
+            return ConversationHandler.END
+        
+        if message_text == '📊 Esporta Tutto':
+            return await self.export_all_data(update, context)
+        
+        # Estrai l'anno dal testo del pulsante
+        if message_text.startswith('📅 Esporta '):
+            selected_year = message_text.replace('📅 Esporta ', '').strip()
+            return await self.generate_year_export(update, context, selected_year)
+        
+        await update.message.reply_text("Selezione non valida.")
+        return EXPORT_SELECT_YEAR
+
+    async def generate_year_export(self, update: Update, context: ContextTypes.DEFAULT_TYPE, year):
+        """Genera e invia il file CSV per l'anno specificato"""
+        try:
+            conn = sqlite3.connect(DATABASE_NAME)
+            c = conn.cursor()
+            c.execute('''
+                SELECT report_number, exit_time, return_time, address, intervention_type,
+                       squad_leader, driver, participants, vehicles_used
+                FROM interventions 
+                WHERE year = ? 
+                ORDER BY exit_time
+            ''', (year,))
+            
+            interventions = c.fetchall()
+            conn.close()
+            
+            if not interventions:
+                await update.message.reply_text(f"❌ Nessun intervento trovato per l'anno {year}")
+                return EXPORT_SELECT_YEAR
+            
+            # Crea file CSV in memoria
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # Intestazione migliorata CON TIPOLOGIA
+            writer.writerow([
+                'Rapporto', 'Anno', 'Data Uscita', 'Ora Uscita', 
+                'Data Rientro', 'Ora Rientro', 'Indirizzo', 'Tipologia',
+                'Caposquadra', 'Autista', 'Vigili Partecipanti', 'Mezzi Utilizzati'
+            ])
+            
+            # Dati
+            for interv in interventions:
+                exit_parts = interv[1].split(' ') if interv[1] else ['', '']
+                return_parts = interv[2].split(' ') if interv[2] else ['', '']
+                
+                writer.writerow([
+                    interv[0],  # report_number
+                    year,
+                    exit_parts[0] if len(exit_parts) > 0 else '',
+                    exit_parts[1] if len(exit_parts) > 1 else '',
+                    return_parts[0] if len(return_parts) > 0 else '',
+                    return_parts[1] if len(return_parts) > 1 else '',
+                    interv[3],  # address
+                    interv[4],  # intervention_type (NUOVO)
+                    interv[5],  # squad_leader
+                    interv[6],  # driver
+                    ', '.join(json.loads(interv[7])),  # participants
+                    ', '.join(json.loads(interv[8]))   # vehicles_used
+                ])
+            
+            # Prepara file per download
+            output.seek(0)
+            csv_content = output.getvalue().encode('utf-8')
+            output.close()
+            
+            # Statistiche aggiuntive
+            total_interventions = len(interventions)
+            first_intervention = interventions[0][1] if interventions else "N/A"
+            last_intervention = interventions[-1][1] if interventions else "N/A"
+            
+            # Invia file
+            await update.message.reply_document(
+                document=io.BytesIO(csv_content),
+                filename=f"interventi_{year}.csv",
+                caption=(
+                    f"📊 **ESPORTazione INTERVENTI {year}**\n"
+                    f"🔢 Totale interventi: {total_interventions}\n"
+                    f"📅 Primo intervento: {first_intervention}\n"
+                    f"🔄 Ultimo intervento: {last_intervention}\n"
+                    f"💾 Formato: CSV (Excel compatibile)"
+                )
+            )
+            
+            # Torna al menu esportazione
+            return await self.export_data_menu(update, context)
+            
+        except Exception as e:
+            logger.error(f"Errore durante l'esportazione: {str(e)}")
+            await update.message.reply_text(
+                f"❌ Errore durante l'esportazione: {str(e)}\n"
+                f"Riprova più tardi."
+            )
+            return EXPORT_SELECT_YEAR
+
+    async def export_all_data(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Esporta tutti i dati indipendentemente dall'anno"""
+        try:
+            conn = sqlite3.connect(DATABASE_NAME)
+            c = conn.cursor()
+            c.execute('''
+                SELECT report_number, year, exit_time, return_time, address, intervention_type,
+                       squad_leader, driver, participants, vehicles_used
+                FROM interventions 
+                ORDER BY year DESC, exit_time
+            ''')
+            
+            interventions = c.fetchall()
+            conn.close()
+            
+            if not interventions:
+                await update.message.reply_text("❌ Nessun intervento trovato nel database")
+                return EXPORT_SELECT_YEAR
+            
+            # Crea file CSV in memoria
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # Intestazione CON TIPOLOGIA
+            writer.writerow([
+                'Rapporto', 'Anno', 'Data Uscita', 'Ora Uscita', 
+                'Data Rientro', 'Ora Rientro', 'Indirizzo', 'Tipologia',
+                'Caposquadra', 'Autista', 'Vigili Partecipanti', 'Mezzi Utilizzati'
+            ])
+            
+            # Dati
+            for interv in interventions:
+                exit_parts = interv[2].split(' ') if interv[2] else ['', '']
+                return_parts = interv[3].split(' ') if interv[3] else ['', '']
+                
+                writer.writerow([
+                    interv[0],  # report_number
+                    interv[1],  # year
+                    exit_parts[0] if len(exit_parts) > 0 else '',
+                    exit_parts[1] if len(exit_parts) > 1 else '',
+                    return_parts[0] if len(return_parts) > 0 else '',
+                    return_parts[1] if len(return_parts) > 1 else '',
+                    interv[4],  # address
+                    interv[5],  # intervention_type (NUOVO)
+                    interv[6],  # squad_leader
+                    interv[7],  # driver
+                    ', '.join(json.loads(interv[8])),  # participants
+                    ', '.join(json.loads(interv[9]))   # vehicles_used
+                ])
+            
+            # Prepara file per download
+            output.seek(0)
+            csv_content = output.getvalue().encode('utf-8')
+            output.close()
+            
+            # Statistiche
+            total_interventions = len(interventions)
+            years = set(interv[1] for interv in interventions)
+            
+            await update.message.reply_document(
+                document=io.BytesIO(csv_content),
+                filename=f"interventi_completo_{datetime.now().strftime('%Y%m%d')}.csv",
+                caption=(
+                    f"📊 **ESPORTazione COMPLETA**\n"
+                    f"🔢 Totale interventi: {total_interventions}\n"
+                    f"📅 Anni coperti: {len(years)} ({', '.join(map(str, sorted(years)))})\n"
+                    f"💾 Formato: CSV (Excel compatibile)"
+                )
+            )
+            
+            # Torna al menu esportazione
+            return await self.export_data_menu(update, context)
+            
+        except Exception as e:
+            logger.error(f"Errore durante l'esportazione completa: {str(e)}")
+            await update.message.reply_text(
+                f"❌ Errore durante l'esportazione: {str(e)}"
+            )
+            return EXPORT_SELECT_YEAR
+
+    # 🔥 GESTIONE RICHIESTE ACCESSO (ADMIN)
+    async def manage_requests(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = update.effective_user
+        if not self.is_admin(user.id):
+            await update.message.reply_text("❌ Solo gli admin possono gestire le richieste.")
+            return
+        
+        conn = sqlite3.connect(DATABASE_NAME)
+        c = conn.cursor()
+        c.execute('SELECT * FROM access_requests WHERE status = "pending"')
+        requests = c.fetchall()
+        conn.close()
+        
+        if not requests:
+            await update.message.reply_text("Nessuna richiesta pendente.")
+            return
+        
+        for req in requests:
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Approva", callback_data=f"approve_{req[1]}")],
+                [InlineKeyboardButton("❌ Rifiuta", callback_data=f"reject_{req[1]}")]
+            ])
+            
+            await update.message.reply_text(
+                f"Richiesta da: {req[3]}\n"
+                f"Username: @{req[2]}\n"
+                f"ID: {req[1]}",
+                reply_markup=keyboard
+            )
+
+    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        
+        data = query.data
+        user_id = query.from_user.id
+        
+        if not self.is_admin(user_id):
+            await query.edit_message_text("❌ Non hai i permessi per questa azione.")
+            return
+        
+        if data.startswith('approve_'):
+            telegram_id = int(data.split('_')[1])
+            conn = sqlite3.connect(DATABASE_NAME)
+            c = conn.cursor()
+            c.execute('UPDATE access_requests SET status = "approved" WHERE telegram_id = ?', (telegram_id,))
+            c.execute('INSERT OR REPLACE INTO users (telegram_id, username, full_name, role, is_active) VALUES (?, ?, ?, ?, ?)', 
+                     (telegram_id, 'username', 'full_name', 'user', True))
+            conn.commit()
+            conn.close()
+            await query.edit_message_text(f"✅ Utente approvato!")
+        elif data.startswith('reject_'):
+            telegram_id = int(data.split('_')[1])
+            conn = sqlite3.connect(DATABASE_NAME)
+            c = conn.cursor()
+            c.execute('UPDATE access_requests SET status = "rejected" WHERE telegram_id = ?', (telegram_id,))
+            conn.commit()
+            conn.close()
+            await query.edit_message_text(f"❌ Richiesta rifiutata.")
+
+    # 🔥 GESTIONE PERSONALE (ADMIN) - AGGIUNGI NUOVO
+    async def start_add_personnel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        qualifications = ["VV", "CSV"]
+        keyboard = [[q] for q in qualifications]
+        keyboard.append(['Annulla'])
+        
+        await update.message.reply_text(
+            "Seleziona la qualifica:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return ADD_PERSONNEL_QUALIFICATION
+
+    async def add_personnel_qualification(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == 'Annulla':
+            return await self.cancel(update, context)
+        
+        context.user_data['qualification'] = update.message.text
+        await update.message.reply_text("Inserisci nome e cognome:")
+        return ADD_PERSONNEL_NAME
+
+    async def add_personnel_name(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        context.user_data['full_name'] = update.message.text
+        
+        license_grades = ["IIIE", "III", "II", "I"]
+        keyboard = [[grade] for grade in license_grades]
+        keyboard.append(['Annulla'])
+        
+        await update.message.reply_text(
+            "Seleziona il grado della patente:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return ADD_PERSONNEL_LICENSE
+
+    async def add_personnel_license(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == 'Annulla':
+            return await self.cancel(update, context)
+        
+        context.user_data['license_grade'] = update.message.text
+        
+        keyboard = [['Sì', 'No', 'Annulla']]
+        await update.message.reply_text(
+            "Ha patente nautica?",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return ADD_PERSONNEL_NAUTICAL
+
+    async def add_personnel_nautical(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == 'Annulla':
+            return await self.cancel(update, context)
+        
+        context.user_data['nautical'] = update.message.text == 'Sì'
+        
+        keyboard = [['Sì', 'No', 'Annulla']]
+        await update.message.reply_text(
+            "È SAF?",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return ADD_PERSONNEL_SAF
+
+    async def add_personnel_saf(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == 'Annulla':
+            return await self.cancel(update, context)
+        
+        context.user_data['saf'] = update.message.text == 'Sì'
+        
+        keyboard = [['Sì', 'No', 'Annulla']]
+        await update.message.reply_text(
+            "È TPSS?",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return ADD_PERSONNEL_TPSS
+
+    async def add_personnel_tpss(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == 'Annulla':
+            return await self.cancel(update, context)
+        
+        context.user_data['tpss'] = update.message.text == 'Sì'
+        
+        # Salva il personale
+        conn = sqlite3.connect(DATABASE_NAME)
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO personnel (full_name, qualification, license_grade, 
+                                 has_nautical_license, is_saf, is_tpss)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            context.user_data['full_name'],
+            context.user_data['qualification'],
+            context.user_data['license_grade'],
+            context.user_data['nautical'],
+            context.user_data['saf'],
+            context.user_data['tpss']
+        ))
+        conn.commit()
+        conn.close()
+        
+        user = update.effective_user
+        is_admin = self.is_admin(user.id)
+        await update.message.reply_text(
+            "✅ Personale aggiunto con successo!",
             reply_markup=self.get_main_keyboard(is_admin)
         )
         return ConversationHandler.END
@@ -794,502 +1357,6 @@ class VigiliBot:
         )
         return ConversationHandler.END
 
-    # 🔥 VISUALIZZAZIONE INTERVENTI
-    async def show_last_interventions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        conn = sqlite3.connect(DATABASE_NAME)
-        c = conn.cursor()
-        c.execute('''
-            SELECT report_number, year, exit_time, return_time, address, 
-                   squad_leader, driver, vehicles_used
-            FROM interventions 
-            ORDER BY created_at DESC 
-            LIMIT 10
-        ''')
-        interventions = c.fetchall()
-        conn.close()
-        
-        if not interventions:
-            await update.message.reply_text("Nessun intervento registrato.")
-            return
-        
-        response = "📊 **ULTIMI 10 INTERVENTI**\n\n"
-        for i, interv in enumerate(interventions, 1):
-            response += (
-                f"**{i}. Rapporto {interv[0]}/{interv[1]}**\n"
-                f"📍 Indirizzo: {interv[4]}\n"
-                f"🚨 Uscita: {interv[2]}\n"
-                f"✅ Rientro: {interv[3]}\n"
-                f"👨‍🚒 Caposquadra: {interv[5]}\n"
-                f"🚗 Autista: {interv[6]}\n"
-                f"🚒 Mezzi: {', '.join(json.loads(interv[7]))}\n\n"
-            )
-        
-        await update.message.reply_text(response)
-
-    # 🔥 STATISTICHE
-    async def show_statistics(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        conn = sqlite3.connect(DATABASE_NAME)
-        c = conn.cursor()
-        c.execute('SELECT COUNT(*) FROM interventions')
-        total_interventions = c.fetchone()[0]
-        
-        c.execute('SELECT MIN(exit_time), MAX(exit_time) FROM interventions')
-        date_range = c.fetchone()
-        
-        c.execute('SELECT COUNT(DISTINCT year) FROM interventions')
-        years_count = c.fetchone()[0]
-        
-        c.execute('SELECT DISTINCT year FROM interventions ORDER BY year')
-        years = [str(row[0]) for row in c.fetchall()]
-        
-        conn.close()
-        
-        response = (
-            f"📈 **STATISTICHE INTERVENTI**\n\n"
-            f"🔢 Totale interventi: {total_interventions}\n"
-            f"📅 Anni registrati: {years_count} ({', '.join(years)})\n"
-            f"🚨 Primo intervento: {date_range[0] if date_range[0] else 'N/A'}\n"
-            f"✅ Ultimo intervento: {date_range[1] if date_range[1] else 'N/A'}\n"
-        )
-        
-        await update.message.reply_text(response)
-
-    # 🔥 RICERCA RAPPORTO
-    async def search_report_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text(
-            "Inserisci il numero del rapporto da cercare:",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return SEARCH_REPORT_NUM
-
-    async def search_report_num(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        context.user_data['search_report_num'] = update.message.text
-        await update.message.reply_text("Inserisci l'anno del rapporto:")
-        return SEARCH_REPORT_YEAR
-
-    async def search_report_year(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        report_num = context.user_data['search_report_num']
-        year = update.message.text
-        
-        conn = sqlite3.connect(DATABASE_NAME)
-        c = conn.cursor()
-        c.execute('''
-            SELECT report_number, year, exit_time, return_time, address, 
-                   squad_leader, driver, vehicles_used, participants
-            FROM interventions 
-            WHERE report_number = ? AND year = ?
-        ''', (report_num, year))
-        
-        intervention = c.fetchone()
-        conn.close()
-        
-        user = update.effective_user
-        is_admin = self.is_admin(user.id)
-        
-        if intervention:
-            response = (
-                f"🔍 **RAPPORTO TROVATO**\n\n"
-                f"📋 Rapporto: {intervention[0]}/{intervention[1]}\n"
-                f"📍 Indirizzo: {intervention[4]}\n"
-                f"🚨 Uscita: {intervention[2]}\n"
-                f"✅ Rientro: {intervention[3]}\n"
-                f"👨‍🚒 Caposquadra: {intervention[5]}\n"
-                f"🚗 Autista: {intervention[6]}\n"
-                f"🚒 Mezzi: {', '.join(json.loads(intervention[7]))}\n"
-            )
-            
-            if is_admin:
-                response += f"👥 Partecipanti: {', '.join(json.loads(intervention[8]))}\n"
-            
-            await update.message.reply_text(response)
-        else:
-            await update.message.reply_text("❌ Rapporto non trovato.")
-        
-        return ConversationHandler.END
-
-    # 🔥 ESPORTAZIONE DATI
-    async def export_data_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        if not self.is_admin(user.id):
-            await update.message.reply_text("❌ Solo gli admin possono esportare i dati.")
-            return
-        
-        available_years = self.get_available_years()
-        
-        if not available_years:
-            await update.message.reply_text("❌ Nessun dato disponibile per l'esportazione.")
-            return
-        
-        # Crea tastiera con anni disponibili
-        keyboard = []
-        for year in available_years:
-            keyboard.append([f"📅 Esporta {year}"])
-        
-        keyboard.append(['📊 Esporta Tutto'])
-        keyboard.append(['🔙 Indietro'])
-        
-        await update.message.reply_text(
-            "📊 **ESPORTAZIONE DATI**\n\n"
-            "Seleziona l'anno da esportare:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        return EXPORT_SELECT_YEAR
-
-    async def export_selected_year(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Gestisce la selezione dell'anno per l'esportazione"""
-        user = update.effective_user
-        if not self.is_admin(user.id):
-            await update.message.reply_text("❌ Solo gli admin possono esportare i dati.")
-            return ConversationHandler.END
-        
-        message_text = update.message.text
-        
-        if message_text == '🔙 Indietro':
-            is_admin = self.is_admin(user.id)
-            await update.message.reply_text(
-                "Operazione annullata.",
-                reply_markup=self.get_main_keyboard(is_admin)
-            )
-            return ConversationHandler.END
-        
-        if message_text == '📊 Esporta Tutto':
-            return await self.export_all_data(update, context)
-        
-        # Estrai l'anno dal testo del pulsante
-        if message_text.startswith('📅 Esporta '):
-            selected_year = message_text.replace('📅 Esporta ', '').strip()
-            return await self.generate_year_export(update, context, selected_year)
-        
-        await update.message.reply_text("Selezione non valida.")
-        return EXPORT_SELECT_YEAR
-
-    async def generate_year_export(self, update: Update, context: ContextTypes.DEFAULT_TYPE, year):
-        """Genera e invia il file CSV per l'anno specificato"""
-        try:
-            conn = sqlite3.connect(DATABASE_NAME)
-            c = conn.cursor()
-            c.execute('''
-                SELECT report_number, exit_time, return_time, address, 
-                       squad_leader, driver, participants, vehicles_used
-                FROM interventions 
-                WHERE year = ? 
-                ORDER BY exit_time
-            ''', (year,))
-            
-            interventions = c.fetchall()
-            conn.close()
-            
-            if not interventions:
-                await update.message.reply_text(f"❌ Nessun intervento trovato per l'anno {year}")
-                return EXPORT_SELECT_YEAR
-            
-            # Crea file CSV in memoria
-            output = io.StringIO()
-            writer = csv.writer(output)
-            
-            # Intestazione migliorata
-            writer.writerow([
-                'Rapporto', 'Anno', 'Data Uscita', 'Ora Uscita', 
-                'Data Rientro', 'Ora Rientro', 'Indirizzo', 
-                'Caposquadra', 'Autista', 'Vigili Partecipanti', 'Mezzi Utilizzati'
-            ])
-            
-            # Dati
-            for interv in interventions:
-                exit_parts = interv[1].split(' ') if interv[1] else ['', '']
-                return_parts = interv[2].split(' ') if interv[2] else ['', '']
-                
-                writer.writerow([
-                    interv[0],  # report_number
-                    year,
-                    exit_parts[0] if len(exit_parts) > 0 else '',
-                    exit_parts[1] if len(exit_parts) > 1 else '',
-                    return_parts[0] if len(return_parts) > 0 else '',
-                    return_parts[1] if len(return_parts) > 1 else '',
-                    interv[3],  # address
-                    interv[4],  # squad_leader
-                    interv[5],  # driver
-                    ', '.join(json.loads(interv[6])),  # participants
-                    ', '.join(json.loads(interv[7]))   # vehicles_used
-                ])
-            
-            # Prepara file per download
-            output.seek(0)
-            csv_content = output.getvalue().encode('utf-8')
-            output.close()
-            
-            # Statistiche aggiuntive
-            total_interventions = len(interventions)
-            first_intervention = interventions[0][1] if interventions else "N/A"
-            last_intervention = interventions[-1][1] if interventions else "N/A"
-            
-            # Invia file
-            await update.message.reply_document(
-                document=io.BytesIO(csv_content),
-                filename=f"interventi_{year}.csv",
-                caption=(
-                    f"📊 **ESPORTazione INTERVENTI {year}**\n"
-                    f"🔢 Totale interventi: {total_interventions}\n"
-                    f"📅 Primo intervento: {first_intervention}\n"
-                    f"🔄 Ultimo intervento: {last_intervention}\n"
-                    f"💾 Formato: CSV (Excel compatibile)"
-                )
-            )
-            
-            # Torna al menu esportazione
-            return await self.export_data_menu(update, context)
-            
-        except Exception as e:
-            logger.error(f"Errore durante l'esportazione: {str(e)}")
-            await update.message.reply_text(
-                f"❌ Errore durante l'esportazione: {str(e)}\n"
-                f"Riprova più tardi."
-            )
-            return EXPORT_SELECT_YEAR
-
-    async def export_all_data(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Esporta tutti i dati indipendentemente dall'anno"""
-        try:
-            conn = sqlite3.connect(DATABASE_NAME)
-            c = conn.cursor()
-            c.execute('''
-                SELECT report_number, year, exit_time, return_time, address, 
-                       squad_leader, driver, participants, vehicles_used
-                FROM interventions 
-                ORDER BY year DESC, exit_time
-            ''')
-            
-            interventions = c.fetchall()
-            conn.close()
-            
-            if not interventions:
-                await update.message.reply_text("❌ Nessun intervento trovato nel database")
-                return EXPORT_SELECT_YEAR
-            
-            # Crea file CSV in memoria
-            output = io.StringIO()
-            writer = csv.writer(output)
-            
-            # Intestazione
-            writer.writerow([
-                'Rapporto', 'Anno', 'Data Uscita', 'Ora Uscita', 
-                'Data Rientro', 'Ora Rientro', 'Indirizzo', 
-                'Caposquadra', 'Autista', 'Vigili Partecipanti', 'Mezzi Utilizzati'
-            ])
-            
-            # Dati
-            for interv in interventions:
-                exit_parts = interv[2].split(' ') if interv[2] else ['', '']
-                return_parts = interv[3].split(' ') if interv[3] else ['', '']
-                
-                writer.writerow([
-                    interv[0],  # report_number
-                    interv[1],  # year
-                    exit_parts[0] if len(exit_parts) > 0 else '',
-                    exit_parts[1] if len(exit_parts) > 1 else '',
-                    return_parts[0] if len(return_parts) > 0 else '',
-                    return_parts[1] if len(return_parts) > 1 else '',
-                    interv[4],  # address
-                    interv[5],  # squad_leader
-                    interv[6],  # driver
-                    ', '.join(json.loads(interv[7])),  # participants
-                    ', '.join(json.loads(interv[8]))   # vehicles_used
-                ])
-            
-            # Prepara file per download
-            output.seek(0)
-            csv_content = output.getvalue().encode('utf-8')
-            output.close()
-            
-            # Statistiche
-            total_interventions = len(interventions)
-            years = set(interv[1] for interv in interventions)
-            
-            await update.message.reply_document(
-                document=io.BytesIO(csv_content),
-                filename=f"interventi_completo_{datetime.now().strftime('%Y%m%d')}.csv",
-                caption=(
-                    f"📊 **ESPORTazione COMPLETA**\n"
-                    f"🔢 Totale interventi: {total_interventions}\n"
-                    f"📅 Anni coperti: {len(years)} ({', '.join(map(str, sorted(years)))})\n"
-                    f"💾 Formato: CSV (Excel compatibile)"
-                )
-            )
-            
-            # Torna al menu esportazione
-            return await self.export_data_menu(update, context)
-            
-        except Exception as e:
-            logger.error(f"Errore durante l'esportazione completa: {str(e)}")
-            await update.message.reply_text(
-                f"❌ Errore durante l'esportazione: {str(e)}"
-            )
-            return EXPORT_SELECT_YEAR
-
-    # 🔥 GESTIONE RICHIESTE ACCESSO (ADMIN)
-    async def manage_requests(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        if not self.is_admin(user.id):
-            await update.message.reply_text("❌ Solo gli admin possono gestire le richieste.")
-            return
-        
-        conn = sqlite3.connect(DATABASE_NAME)
-        c = conn.cursor()
-        c.execute('SELECT * FROM access_requests WHERE status = "pending"')
-        requests = c.fetchall()
-        conn.close()
-        
-        if not requests:
-            await update.message.reply_text("Nessuna richiesta pendente.")
-            return
-        
-        for req in requests:
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Approva", callback_data=f"approve_{req[1]}")],
-                [InlineKeyboardButton("❌ Rifiuta", callback_data=f"reject_{req[1]}")]
-            ])
-            
-            await update.message.reply_text(
-                f"Richiesta da: {req[3]}\n"
-                f"Username: @{req[2]}\n"
-                f"ID: {req[1]}",
-                reply_markup=keyboard
-            )
-
-    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        data = query.data
-        user_id = query.from_user.id
-        
-        if not self.is_admin(user_id):
-            await query.edit_message_text("❌ Non hai i permessi per questa azione.")
-            return
-        
-        if data.startswith('approve_'):
-            telegram_id = int(data.split('_')[1])
-            conn = sqlite3.connect(DATABASE_NAME)
-            c = conn.cursor()
-            c.execute('UPDATE access_requests SET status = "approved" WHERE telegram_id = ?', (telegram_id,))
-            c.execute('INSERT OR REPLACE INTO users (telegram_id, username, full_name, role, is_active) VALUES (?, ?, ?, ?, ?)', 
-                     (telegram_id, 'username', 'full_name', 'user', True))
-            conn.commit()
-            conn.close()
-            await query.edit_message_text(f"✅ Utente approvato!")
-        elif data.startswith('reject_'):
-            telegram_id = int(data.split('_')[1])
-            conn = sqlite3.connect(DATABASE_NAME)
-            c = conn.cursor()
-            c.execute('UPDATE access_requests SET status = "rejected" WHERE telegram_id = ?', (telegram_id,))
-            conn.commit()
-            conn.close()
-            await query.edit_message_text(f"❌ Richiesta rifiutata.")
-
-    # 🔥 GESTIONE PERSONALE (ADMIN) - AGGIUNGI NUOVO
-    async def start_add_personnel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        qualifications = ["VV", "CSV"]
-        keyboard = [[q] for q in qualifications]
-        keyboard.append(['Annulla'])
-        
-        await update.message.reply_text(
-            "Seleziona la qualifica:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        return ADD_PERSONNEL_QUALIFICATION
-
-    async def add_personnel_qualification(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.message.text == 'Annulla':
-            return await self.cancel(update, context)
-        
-        context.user_data['qualification'] = update.message.text
-        await update.message.reply_text("Inserisci nome e cognome:")
-        return ADD_PERSONNEL_NAME
-
-    async def add_personnel_name(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        context.user_data['full_name'] = update.message.text
-        
-        license_grades = ["IIIE", "III", "II", "I"]
-        keyboard = [[grade] for grade in license_grades]
-        keyboard.append(['Annulla'])
-        
-        await update.message.reply_text(
-            "Seleziona il grado della patente:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        return ADD_PERSONNEL_LICENSE
-
-    async def add_personnel_license(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.message.text == 'Annulla':
-            return await self.cancel(update, context)
-        
-        context.user_data['license_grade'] = update.message.text
-        
-        keyboard = [['Sì', 'No', 'Annulla']]
-        await update.message.reply_text(
-            "Ha patente nautica?",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        return ADD_PERSONNEL_NAUTICAL
-
-    async def add_personnel_nautical(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.message.text == 'Annulla':
-            return await self.cancel(update, context)
-        
-        context.user_data['nautical'] = update.message.text == 'Sì'
-        
-        keyboard = [['Sì', 'No', 'Annulla']]
-        await update.message.reply_text(
-            "È SAF?",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        return ADD_PERSONNEL_SAF
-
-    async def add_personnel_saf(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.message.text == 'Annulla':
-            return await self.cancel(update, context)
-        
-        context.user_data['saf'] = update.message.text == 'Sì'
-        
-        keyboard = [['Sì', 'No', 'Annulla']]
-        await update.message.reply_text(
-            "È TPSS?",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        return ADD_PERSONNEL_TPSS
-
-    async def add_personnel_tpss(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if update.message.text == 'Annulla':
-            return await self.cancel(update, context)
-        
-        context.user_data['tpss'] = update.message.text == 'Sì'
-        
-        # Salva il personale
-        conn = sqlite3.connect(DATABASE_NAME)
-        c = conn.cursor()
-        c.execute('''
-            INSERT INTO personnel (full_name, qualification, license_grade, 
-                                 has_nautical_license, is_saf, is_tpss)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (
-            context.user_data['full_name'],
-            context.user_data['qualification'],
-            context.user_data['license_grade'],
-            context.user_data['nautical'],
-            context.user_data['saf'],
-            context.user_data['tpss']
-        ))
-        conn.commit()
-        conn.close()
-        
-        user = update.effective_user
-        is_admin = self.is_admin(user.id)
-        await update.message.reply_text(
-            "✅ Personale aggiunto con successo!",
-            reply_markup=self.get_main_keyboard(is_admin)
-        )
-        return ConversationHandler.END
-
     # 🔥 GESTIONE MEZZI (ADMIN)
     async def start_add_vehicle(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
@@ -1373,7 +1440,7 @@ class VigiliBot:
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         self.application.add_handler(CallbackQueryHandler(self.handle_callback))
 
-        # Conversazione nuovo intervento
+        # Conversazione nuovo intervento CON TIPOLOGIA
         intervention_conv = ConversationHandler(
             entry_points=[MessageHandler(filters.Regex('^📋 Nuovo Intervento$'), self.start_new_intervention)],
             states={
@@ -1382,6 +1449,7 @@ class VigiliBot:
                 NEW_INTERVENTION_EXIT_TIME: [MessageHandler(filters.TEXT, self.new_intervention_exit_time)],
                 NEW_INTERVENTION_RETURN_TIME: [MessageHandler(filters.TEXT, self.new_intervention_return_time)],
                 NEW_INTERVENTION_ADDRESS: [MessageHandler(filters.TEXT, self.new_intervention_address)],
+                NEW_INTERVENTION_TYPE: [MessageHandler(filters.TEXT, self.new_intervention_type)],
                 NEW_INTERVENTION_SQUAD_LEADER: [MessageHandler(filters.TEXT, self.new_intervention_squad_leader)],
                 NEW_INTERVENTION_DRIVER: [MessageHandler(filters.TEXT, self.new_intervention_driver)],
                 NEW_INTERVENTION_PARTICIPANTS: [MessageHandler(filters.TEXT, self.new_intervention_participants)],
@@ -1457,33 +1525,49 @@ class VigiliBot:
         """Avvia il bot"""
         self.application = Application.builder().token(self.token).build()
         self.setup_handlers()
-        logger.info("🤖 Bot Vigili del Fuoco avviato con GESTIONE VIGILI COMPLETA!")
+        logger.info("🤖 Bot Vigili del Fuoco avviato con TIPOLOGIA INTERVENTI!")
         self.application.run_polling()
 
 def main():
     BOT_TOKEN = os.environ.get('BOT_TOKEN')
+    RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
+    
     if not BOT_TOKEN:
         logger.error("❌ BOT_TOKEN non configurato")
         return
     
     print("🚀 Avvio bot Vigili del Fuoco...")
     
-    # 1. AVVIA KEEP-ALIVE (per Render Web Service)
+    # 1. AVVIA KEEP-ALIVE
     start_keep_alive()
     
-    # 2. RIPRISTINO DATABASE ALL'AVVIO
+    # 2. RIPRISTINO DATABASE
     if not enhanced_restore_on_startup():
         print("📝 Inizializzazione database nuovo...")
     
-    # 3. CONFIGURA ADMIN AUTOMATICA
+    # 3. CONFIGURA ADMIN
     bot = VigiliBot(BOT_TOKEN)
     bot.setup_admins_and_users()
     
-    # 4. AVVIA SISTEMA BACKUP
+    # 4. AVVIA BACKUP
     start_backup_system()
     
-    # 5. AVVIA BOT
-    bot.run()
+    # 5. CONFIGURA WEBHOOK (SOLUZIONE DEFINITIVA)
+    if RENDER_URL:
+        # Webhook per Render - MOLTO più stabile
+        app = bot.application
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=5000,
+            url_path=BOT_TOKEN,
+            webhook_url=f"{RENDER_URL}/{BOT_TOKEN}",
+            secret_token='VIGILI_BOT_SECRET'
+        )
+        print("🌐 Bot avviato in modalità WEBHOOK")
+    else:
+        # Fallback a polling per sviluppo
+        bot.application.run_polling()
+        print("🔍 Bot avviato in modalità POLLING")
 
 if __name__ == "__main__":
     main()
