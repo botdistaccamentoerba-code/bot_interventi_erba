@@ -12,6 +12,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 
 # Import sistema backup
 from backup_system import enhanced_restore_on_startup, start_backup_system
+from keep_alive import start_keep_alive
 
 # Configurazione
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
@@ -180,7 +181,7 @@ class VigiliBot:
         conn.close()
         return years
 
-    # 🔥 GESTIONE UTENTI E ACCESSO - VERSIONE MIGLIORATA
+    # 🔥 GESTIONE UTENTI E ACCESSO
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         telegram_id = user.id
@@ -909,17 +910,16 @@ class VigiliBot:
             reply_markup=self.get_main_keyboard(is_admin)
         )
         return ConversationHandler.END
-   
+
     # 🔥 GESTIONE MEZZI (ADMIN)
     async def start_add_vehicle(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Inserisci la targa del mezzo:",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return ADD_VEHICLE_PLATE
+        await update.message.reply_text(
+            "Inserisci la targa del mezzo:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return ADD_VEHICLE_PLATE
 
     async def add_vehicle_plate(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Salva la targa
         context.user_data['license_plate'] = update.message.text
         await update.message.reply_text("Inserisci il modello del mezzo:")
         return ADD_VEHICLE_MODEL
@@ -927,21 +927,21 @@ class VigiliBot:
     async def add_vehicle_model(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         model = update.message.text
         license_plate = context.user_data['license_plate']
-    
+        
         # Salva il mezzo
         conn = sqlite3.connect(DATABASE_NAME)
         c = conn.cursor()
         c.execute('INSERT OR IGNORE INTO vehicles (license_plate, model) VALUES (?, ?)', (license_plate, model))
         conn.commit()
         conn.close()
-    
+        
         user = update.effective_user
         is_admin = self.is_admin(user.id)
-    await update.message.reply_text(
-        f"✅ Mezzo {license_plate} aggiunto con successo!",
-        reply_markup=self.get_main_keyboard(is_admin)
-    )
-    return ConversationHandler.END
+        await update.message.reply_text(
+            f"✅ Mezzo {license_plate} aggiunto con successo!",
+            reply_markup=self.get_main_keyboard(is_admin)
+        )
+        return ConversationHandler.END
 
     # 🔥 HEALTH CHECK
     async def health_check(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1075,7 +1075,6 @@ def main():
     print("🚀 Avvio bot Vigili del Fuoco...")
     
     # 1. AVVIA KEEP-ALIVE (per Render Web Service)
-    from keep_alive import start_keep_alive
     start_keep_alive()
     
     # 2. RIPRISTINO DATABASE ALL'AVVIO
