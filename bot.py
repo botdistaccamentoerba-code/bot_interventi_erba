@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
     MODIFICA_VIGILE_SELECT, MODIFICA_CAMPO_SELECT, MODIFICA_NUOVO_VALORE,
     NEW_INTERVENTION_REPORT_PROGRESSIVO,
     CONFERMA_RICARICA_DATI
-) = range(34)
+) = range(32)
 
 class VigiliBot:
     def __init__(self, token):
