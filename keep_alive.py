@@ -1,21 +1,31 @@
-from flask import Flask
+# keep_alive.py
+import requests
+import time
+import os
 import threading
-
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "🤖 Bot Vigili del Fuoco - Online"
-
-@app.route('/health')
-def health():
-    return "✅ OK"
-
-def run_flask():
-    app.run(host='0.0.0.0', port=5000)
+from datetime import datetime
 
 def start_keep_alive():
-    """Avvia Flask in thread separato per mantenere la porta aperta"""
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    print("🌐 Server keep-alive avviato sulla porta 5000")
+    """Avvia il sistema keep-alive per evitare lo spin-down"""
+    def keep_alive_loop():
+        urls = [
+            "https://{your-render-app}.onrender.com/health",
+            "https://{your-render-app}.onrender.com/",
+            "https://{your-render-app}.onrender.com/ping"
+        ]
+        
+        print("🔄 Sistema keep-alive avviato! Ping ogni 10 minuti...")
+        
+        while True:
+            for url in urls:
+                try:
+                    response = requests.get(url, timeout=10)
+                    print(f"✅ Ping riuscito - {datetime.now().strftime('%H:%M:%S')} - {url}")
+                except Exception as e:
+                    print(f"❌ Errore ping {url}: {e}")
+            
+            # Aspetta 10 minuti (600 secondi)
+            time.sleep(600)
+    
+    thread = threading.Thread(target=keep_alive_loop, daemon=True)
+    thread.start()
