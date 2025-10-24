@@ -806,7 +806,6 @@ class VigiliBot:
             conn.close()
             await query.edit_message_text(f"❌ Richiesta rifiutata.")
 
-
     # 🔥 GESTIONE PERSONALE (ADMIN)
     async def start_add_personnel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         qualifications = ["VV", "CSV"]
@@ -844,7 +843,7 @@ class VigiliBot:
         if update.message.text == 'Annulla':
             return await self.cancel(update, context)
         
-        context.user_data['license_grade'] = update.message.text if update.message.text != 'Nessuna' else None
+        context.user_data['license_grade'] = update.message.text
         
         keyboard = [['Sì', 'No', 'Annulla']]
         await update.message.reply_text(
@@ -909,8 +908,7 @@ class VigiliBot:
             "✅ Personale aggiunto con successo!",
             reply_markup=self.get_main_keyboard(is_admin)
         )
-        return ConversationHandler.END    
-
+        return ConversationHandler.END
     # 🔥 GESTIONE MEZZI (ADMIN)
     async def start_add_vehicle(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
