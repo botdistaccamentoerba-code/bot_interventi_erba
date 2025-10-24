@@ -400,14 +400,6 @@ class VigiliBot:
             await self.health_check(update, context)
         elif message_text == '👥 Gestione Richieste' and is_admin:
             await self.manage_requests(update, context)
-        elif message_text == '➕ Aggiungi Personale' and is_admin:
-            await self.start_add_personnel(update, context)
-        elif message_text == '✏️ Gestione Vigili' and is_admin:
-            await self.manage_personnel(update, context)
-        elif message_text == '🚗 Aggiungi Mezzo' and is_admin:
-            await self.start_add_vehicle(update, context)
-        elif message_text == '👨‍🚒 Modifica Vigile' and is_admin:
-            await self.modifica_vigile_start(update, context)
         elif message_text == '🔄 Ricarica Dati Precompilati' and is_admin:
             context.user_data['awaiting_reload_confirmation'] = True
             await self.ricarica_dati_precompilati(update, context)
@@ -1931,7 +1923,7 @@ class VigiliBot:
         print("🔍 Bot avviato in modalità POLLING")
         self.application.run_polling()
 
-# 🔥 SERVER FLASK PER KEEP-ALIVE
+# 🔥 SERVER FLASK PER KEEP-ALIVE - COMPLETO
 from flask import Flask
 import threading
 
@@ -1952,6 +1944,10 @@ def ping():
 @app.route('/status')
 def status():
     return "Bot Active - Keep-alive: ✅"
+
+@app.route('/keep-alive')
+def keep_alive():
+    return f"KEEP-ALIVE ACTIVE - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 
 def run_flask():
     """Avvia il server Flask in un thread separato"""
