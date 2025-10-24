@@ -909,6 +909,7 @@ class VigiliBot:
             reply_markup=self.get_main_keyboard(is_admin)
         )
         return ConversationHandler.END
+   
     # 🔥 GESTIONE MEZZI (ADMIN)
     async def start_add_vehicle(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
