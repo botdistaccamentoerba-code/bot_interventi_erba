@@ -227,15 +227,14 @@ class VigiliBot:
         logger.info(f"👑 Admin configurati automaticamente: {admin_ids}")
     
     def get_main_keyboard(self, is_admin=False):
-        """Tastiera principale migliorata"""
+            """Tastiera principale migliorata - SOLO FUNZIONI ESSENZIALI"""
         keyboard = [
             ['📋 Nuovo Intervento', '📊 Ultimi Interventi'],
             ['📈 Statistiche', '🔍 Cerca Rapporto'],
             ['📁 Esporta Dati', '🔄 Health Check']
         ]
         if is_admin:
-            keyboard.append(['👥 Gestione Richieste', '➕ Aggiungi Personale'])
-            keyboard.append(['✏️ Gestione Vigili', '🚗 Aggiungi Mezzo'])
+            keyboard.append(['👥 Gestione Richieste'])
             keyboard.append(['👨‍🚒 Modifica Vigile', '⚙️ Altro'])
         return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
@@ -1919,31 +1918,18 @@ class VigiliBot:
         print(f"✅ {len(self.application.handlers)} gruppi di handler configurati")
 
     def run(self):
+    
         """Avvia il bot CORRETTO"""
         self.application = Application.builder().token(self.token).build()
-        
-        # ✅ IMPOSTA HANDLER PRIMA del run_polling/run_webhook
+    
+    # ✅ IMPOSTA HANDLER PRIMA del run_polling
         self.setup_handlers()
-        
+    
         logger.info("🤖 Bot Vigili del Fuoco avviato con TIPOLOGIA INTERVENTI!")
-        
-        # Configura webhook o polling DOPO gli handler
-        RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
-        
-        if RENDER_URL:
-            # Webhook per Render
-            self.application.run_webhook(
-                listen="0.0.0.0",
-                port=5000,
-                url_path=self.token,
-                webhook_url=f"{RENDER_URL}/{self.token}",
-                secret_token='VIGILI_BOT_SECRET'
-            )
-            print("🌐 Bot avviato in modalità WEBHOOK")
-        else:
-            # Fallback a polling per sviluppo
-            self.application.run_polling()
-            print("🔍 Bot avviato in modalità POLLING")
+    
+        # ⚠️ USA SOLO POLLING - Webhook richiede dipendenze aggiuntive
+        print("🔍 Bot avviato in modalità POLLING")
+        self.application.run_polling()
 
 # 🔥 SERVER FLASK PER KEEP-ALIVE
 from flask import Flask
