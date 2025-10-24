@@ -40,8 +40,9 @@ logger = logging.getLogger(__name__)
     MANAGE_PERSONNEL_SELECTED, MANAGE_PERSONNEL_ACTION, UPDATE_LICENSE_CONFIRM,
     UPDATE_QUALIFICATION_CONFIRM, UPDATE_NAUTICAL_CONFIRM, UPDATE_SAF_TPSS_CONFIRM,
     MODIFICA_VIGILE_SELECT, MODIFICA_CAMPO_SELECT, MODIFICA_NUOVO_VALORE,
-    NEW_INTERVENTION_REPORT_PROGRESSIVO
-) = range(33)
+    NEW_INTERVENTION_REPORT_PROGRESSIVO,
+    CONFERMA_RICARICA_DATI
+) = range(34)
 
 class VigiliBot:
     def __init__(self, token):
@@ -185,6 +186,25 @@ class VigiliBot:
         conn.commit()
         conn.close()
     
+    async def ricarica_dati_precompilati(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Forza la ricarica dei dati precompilati (COMANDO ADMIN)"""
+        # Conferma prima di cancellare tutto!
+        keyboard = [
+            ['✅ Sì, ricarica tutto', '❌ No, annulla']
+        ]
+        
+        await update.message.reply_text(
+            "⚠️ **ATTENZIONE: RICARICA DATI** ⚠️\n\n"
+            "Questo comando CANCELLERÀ:\n"
+            "• Tutti i vigili attuali\n" 
+            "• Tutti i mezzi attuali\n"
+            "• E ricaricherà i dati precompilati\n\n"
+            "Sei sicuro di voler continuare?",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        
+        return CONFERMA_RICARICA_DATI
+    
     def setup_admins_and_users(self):
         """Configura admin e utenti automaticamente all'avvio"""
         admin_ids = [1816045269, 653425963, 693843502]
@@ -310,6 +330,63 @@ class VigiliBot:
         
         is_admin = self.is_admin(user.id)
         
+        # Gestione conferma ricarica dati
+        if context.user_data.get('awaiting_reload_confirmation'):
+            if message_text == '✅ Sì, ricarica tutto':
+                # Procedi con la ricarica
+                conn = sqlite3.connect(DATABASE_NAME)
+                c = conn.cursor()
+                
+                # Conta quanti record ci sono prima
+                c.execute('SELECT COUNT(*) FROM personnel')
+                count_vigili_prima = c.fetchone()[0]
+                c.execute('SELECT COUNT(*) FROM vehicles') 
+                count_mezzi_prima = c.fetchone()[0]
+                
+                # Svuota le tabelle (ATTENZIONE: cancella i dati esistenti!)
+                c.execute('DELETE FROM personnel')
+                c.execute('DELETE FROM vehicles')
+                
+                conn.commit()
+                conn.close()
+                
+                # Ricarica i dati precompilati
+                self.carica_dati_precompilati()
+                
+                # Conta quanti record ci sono dopo
+                conn = sqlite3.connect(DATABASE_NAME)
+                c = conn.cursor()
+                c.execute('SELECT COUNT(*) FROM personnel')
+                count_vigili_dopo = c.fetchone()[0]
+                c.execute('SELECT COUNT(*) FROM vehicles')
+                count_mezzi_dopo = c.fetchone()[0]
+                conn.close()
+                
+                # Reset dello stato
+                context.user_data['awaiting_reload_confirmation'] = False
+                
+                await update.message.reply_text(
+                    f"✅ **DATI RICARICATI CON SUCCESSO!**\n\n"
+                    f"📊 **PRIMA:**\n"
+                    f"• 👥 Vigili: {count_vigili_prima}\n"
+                    f"• 🚗 Mezzi: {count_mezzi_prima}\n\n"
+                    f"📊 **DOPO:**\n" 
+                    f"• 👥 Vigili: {count_vigili_dopo}\n"
+                    f"• 🚗 Mezzi: {count_mezzi_dopo}\n\n"
+                    f"🔄 Dati precompilati ricaricati!",
+                    reply_markup=self.get_main_keyboard(is_admin)
+                )
+                return
+            
+            elif message_text in ['❌ No, annulla', '🔙 Indietro']:
+                # Annulla l'operazione
+                context.user_data['awaiting_reload_confirmation'] = False
+                await update.message.reply_text(
+                    "❌ Operazione annullata. Nessun dato è stato modificato.",
+                    reply_markup=self.get_main_keyboard(is_admin)
+                )
+                return
+        
         if message_text == '📋 Nuovo Intervento':
             await self.start_new_intervention(update, context)
         elif message_text == '📊 Ultimi Interventi':
@@ -332,6 +409,9 @@ class VigiliBot:
             await self.start_add_vehicle(update, context)
         elif message_text == '👨‍🚒 Modifica Vigile' and is_admin:
             await self.modifica_vigile_start(update, context)
+        elif message_text == '🔄 Ricarica Dati Precompilati' and is_admin:
+            context.user_data['awaiting_reload_confirmation'] = True
+            await self.ricarica_dati_precompilati(update, context)
         elif message_text == '⚙️ Altro' and is_admin:
             await self.menu_altro(update, context)
         else:
@@ -341,7 +421,8 @@ class VigiliBot:
         """Menu funzioni aggiuntive per admin"""
         keyboard = [
             ['📋 Lista Vigili Completa', '🚗 Lista Mezzi Completa'],
-            ['🔄 Ricarica Dati Precompilati', '🔙 Indietro']
+            ['🔄 Ricarica Dati Precompilati', '📊 Statistiche Avanzate'],
+            ['🔙 Indietro']
         ]
         
         await update.message.reply_text(
@@ -900,7 +981,7 @@ class VigiliBot:
 
     async def modifica_campo_selected(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message.text == '🔙 Indietro':
-            return await self.modifica_vigile_start(update, context)
+            return await self.modifica_vigile_selected(update, context)
         
         campo = update.message.text
         context.user_data['campo_modifica'] = campo
@@ -1763,6 +1844,16 @@ class VigiliBot:
         )
         self.application.add_handler(modifica_vigile_conv)
 
+        # Conversazione ricarica dati precompilati
+        ricarica_conv = ConversationHandler(
+            entry_points=[MessageHandler(filters.Regex('^🔄 Ricarica Dati Precompilati$'), self.ricarica_dati_precompilati)],
+            states={
+                CONFERMA_RICARICA_DATI: [MessageHandler(filters.TEXT, self.handle_message)],
+            },
+            fallbacks=[CommandHandler('cancel', self.cancel)]
+        )
+        self.application.add_handler(ricarica_conv)
+
         # Conversazione ricerca rapporto
         search_conv = ConversationHandler(
             entry_points=[MessageHandler(filters.Regex('^🔍 Cerca Rapporto$'), self.search_report_start)],
@@ -1854,6 +1945,32 @@ class VigiliBot:
             self.application.run_polling()
             print("🔍 Bot avviato in modalità POLLING")
 
+# 🔥 SERVER FLASK PER KEEP-ALIVE
+from flask import Flask
+import threading
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 Bot Vigili del Fuoco - ONLINE 🟢"
+
+@app.route('/health')
+def health():
+    return "OK"
+
+@app.route('/ping')
+def ping():
+    return f"PONG - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
+@app.route('/status')
+def status():
+    return "Bot Active - Keep-alive: ✅"
+
+def run_flask():
+    """Avvia il server Flask in un thread separato"""
+    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+
 def main():
     BOT_TOKEN = os.environ.get('BOT_TOKEN')
     RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
@@ -1864,21 +1981,26 @@ def main():
     
     print("🚀 Avvio bot Vigili del Fuoco...")
     
-    # 1. AVVIA KEEP-ALIVE
+    # 1. AVVIA SERVER FLASK PER KEEP-ALIVE
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    print("✅ Flask server started on port 5000")
+    
+    # 2. AVVIA KEEP-ALIVE AGGRESSIVO (5 minuti)
     start_keep_alive()
     
-    # 2. RIPRISTINO DATABASE
+    # 3. RIPRISTINO DATABASE
     if not enhanced_restore_on_startup():
         print("📝 Inizializzazione database nuovo...")
     
-    # 3. CONFIGURA ADMIN E AVVIA BOT
+    # 4. CONFIGURA ADMIN E AVVIA BOT
     bot = VigiliBot(BOT_TOKEN)
     bot.setup_admins_and_users()
     
-    # 4. AVVIA BACKUP
+    # 5. AVVIA BACKUP
     start_backup_system()
     
-    # 5. AVVIA IL BOT (gli handler sono già configurati nel costruttore)
+    # 6. AVVIA IL BOT
     bot.run()
 
 if __name__ == "__main__":
