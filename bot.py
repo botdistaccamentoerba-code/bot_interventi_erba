@@ -1,5 +1,4 @@
-#gist id d6b7f54ec9ab952abbec068dc2fdf0c1
-# apikey rnd_vwifq7NnYes2wGlWKDOkfwpbGN0i
+#gist id d6b7f54ec9ab952abbec068dc2fdf0c1 # apikey rnd_vwifq7NnYes2wGlWKDOkfwpbGN0i
 import os
 import logging
 import sqlite3
@@ -34,8 +33,10 @@ logger = logging.getLogger(__name__)
     NEW_INTERVENTION_RETURN_TIME, NEW_INTERVENTION_ADDRESS, NEW_INTERVENTION_SQUAD_LEADER, 
     NEW_INTERVENTION_DRIVER, NEW_INTERVENTION_PARTICIPANTS, NEW_INTERVENTION_VEHICLES,
     SEARCH_REPORT_NUM, SEARCH_REPORT_YEAR,
-    EXPORT_SELECT_YEAR
-) = range(20)
+    EXPORT_SELECT_YEAR,
+    MANAGE_PERSONNEL_SELECTED, MANAGE_PERSONNEL_ACTION, UPDATE_LICENSE_CONFIRM,
+    UPDATE_QUALIFICATION_CONFIRM, UPDATE_NAUTICAL_CONFIRM, UPDATE_SAF_TPSS_CONFIRM
+) = range(28)
 
 class VigiliBot:
     def __init__(self, token):
@@ -153,14 +154,15 @@ class VigiliBot:
         logger.info(f"👑 Admin configurati automaticamente: {admin_ids}")
     
     def get_main_keyboard(self, is_admin=False):
-        """Tastiera principale"""
+        """Tastiera principale migliorata"""
         keyboard = [
             ['📋 Nuovo Intervento', '📊 Ultimi Interventi'],
             ['📈 Statistiche', '🔍 Cerca Rapporto'],
             ['📁 Esporta Dati', '🔄 Health Check']
         ]
         if is_admin:
-            keyboard.append(['👥 Gestione Richieste', '➕ Aggiungi Personale', '🚗 Aggiungi Mezzo'])
+            keyboard.append(['👥 Gestione Richieste', '➕ Aggiungi Personale'])
+            keyboard.append(['✏️ Gestione Vigili', '🚗 Aggiungi Mezzo'])
         return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
     def is_admin(self, user_id):
@@ -270,12 +272,14 @@ class VigiliBot:
             await self.manage_requests(update, context)
         elif message_text == '➕ Aggiungi Personale' and is_admin:
             await self.start_add_personnel(update, context)
+        elif message_text == '✏️ Gestione Vigili' and is_admin:
+            await self.manage_personnel(update, context)
         elif message_text == '🚗 Aggiungi Mezzo' and is_admin:
             await self.start_add_vehicle(update, context)
         else:
             await update.message.reply_text("Comando non riconosciuto.")
 
-    # 🔥 GESTIONE INTERVENTI
+    # 🔥 GESTIONE INTERVENTI CON TASTIERE INTERATTIVE
     async def start_new_intervention(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "Iniziamo con l'inserimento del nuovo intervento.\n"
@@ -314,10 +318,10 @@ class VigiliBot:
         conn.close()
         
         if personnel:
-            keyboard = [[p[1]] for p in personnel]
+            keyboard = [[f"👨‍🚒 {p[1]}"] for p in personnel]
             keyboard.append(['Annulla'])
             await update.message.reply_text(
-                "Seleziona il caposquadra:",
+                "👨‍🚒 **SELEZIONA IL CAPOSQUADRA**",
                 reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             )
         else:
@@ -328,61 +332,211 @@ class VigiliBot:
         if update.message.text == 'Annulla':
             return await self.cancel(update, context)
         
-        context.user_data['squad_leader'] = update.message.text
+        # Estrai solo il nome dalla selezione
+        squad_leader_text = update.message.text
+        if '👨‍🚒' in squad_leader_text:
+            squad_leader_name = squad_leader_text.replace('👨‍🚒 ', '').strip()
+        else:
+            squad_leader_name = squad_leader_text
         
+        context.user_data['squad_leader'] = squad_leader_name
+        
+        # Recupera solo il personale con patente adatta per autista
         conn = sqlite3.connect(DATABASE_NAME)
         c = conn.cursor()
-        c.execute('SELECT * FROM personnel WHERE is_active = TRUE')
-        personnel = c.fetchall()
+        c.execute('''
+            SELECT full_name, license_grade 
+            FROM personnel 
+            WHERE is_active = TRUE 
+            AND license_grade IN ('IIIE', 'III', 'II', 'I')
+            ORDER BY 
+                CASE license_grade 
+                    WHEN 'IIIE' THEN 1
+                    WHEN 'III' THEN 2 
+                    WHEN 'II' THEN 3
+                    WHEN 'I' THEN 4
+                    ELSE 5
+                END,
+                full_name
+        ''')
+        drivers = c.fetchall()
         conn.close()
         
-        if personnel:
-            keyboard = [[p[1]] for p in personnel]
+        if drivers:
+            keyboard = []
+            for driver in drivers:
+                keyboard.append([f"🚗 {driver[0]} ({driver[1]})"])
             keyboard.append(['Annulla'])
+            
             await update.message.reply_text(
-                "Seleziona l'autista:",
+                "👨‍✈️ **SELEZIONA AUTISTA**\n"
+                "Sono mostrati solo i vigili con patente adatta:",
                 reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             )
         else:
-            await update.message.reply_text("Inserisci il nome dell'autista:")
+            await update.message.reply_text(
+                "❌ Nessun autista disponibile con patente adatta.\n"
+                "Inserisci manualmente il nome dell'autista:"
+            )
         return NEW_INTERVENTION_DRIVER
 
     async def new_intervention_driver(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message.text == 'Annulla':
             return await self.cancel(update, context)
         
-        context.user_data['driver'] = update.message.text
-        await update.message.reply_text(
-            "Inserisci i nomi dei vigili partecipanti (separati da virgola):",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return NEW_INTERVENTION_PARTICIPANTS
-
-    async def new_intervention_participants(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        participants = [p.strip() for p in update.message.text.split(',')]
-        context.user_data['participants'] = participants
+        # Estrai solo il nome dalla selezione
+        driver_text = update.message.text
+        if '🚗' in driver_text and '(' in driver_text:
+            driver_name = driver_text.split('🚗 ')[1].split(' (')[0].strip()
+        else:
+            driver_name = driver_text
         
+        context.user_data['driver'] = driver_name
+        
+        # Mostra tutti i vigili per selezione partecipanti
         conn = sqlite3.connect(DATABASE_NAME)
         c = conn.cursor()
-        c.execute('SELECT * FROM vehicles WHERE is_active = TRUE')
-        vehicles = c.fetchall()
+        c.execute('SELECT full_name FROM personnel WHERE is_active = TRUE ORDER BY full_name')
+        all_personnel = c.fetchall()
         conn.close()
         
-        if vehicles:
-            vehicle_list = "\n".join([f"{v[1]} - {v[2]}" for v in vehicles])
+        if all_personnel:
+            # Crea tastiera con checkbox
+            keyboard = []
+            for person in all_personnel:
+                keyboard.append([f"☐ {person[0]}"])
+            keyboard.append(['✅ Conferma Partecipanti'])
+            keyboard.append(['Annulla'])
+            
+            context.user_data['available_personnel'] = [p[0] for p in all_personnel]
+            context.user_data['selected_participants'] = []
+            
             await update.message.reply_text(
-                f"Mezzi disponibili:\n{vehicle_list}\n\n"
-                "Inserisci i mezzi utilizzati (separati da virgola, formato: TARGA1, TARGA2):"
+                "👥 **SELEZIONA PARTECIPANTI**\n\n"
+                "Clicca sui nomi per selezionare/deselezionare.\n"
+                "Quando hai finito, clicca 'Conferma Partecipanti'",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
             )
+            return NEW_INTERVENTION_PARTICIPANTS
         else:
-            await update.message.reply_text("Inserisci i mezzi utilizzati (separati da virgola):")
-        return NEW_INTERVENTION_VEHICLES
+            await update.message.reply_text(
+                "Inserisci i nomi dei vigili partecipanti (separati da virgola):",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            return NEW_INTERVENTION_PARTICIPANTS
+
+    async def new_intervention_participants(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == 'Annulla':
+            return await self.cancel(update, context)
+        
+        if update.message.text == '✅ Conferma Partecipanti':
+            # Conferma selezione
+            participants = context.user_data.get('selected_participants', [])
+            if not participants:
+                await update.message.reply_text("❌ Nessun partecipante selezionato. Seleziona almeno un partecipante.")
+                return NEW_INTERVENTION_PARTICIPANTS
+            
+            context.user_data['participants'] = participants
+            
+            # Mostra mezzi disponibili
+            conn = sqlite3.connect(DATABASE_NAME)
+            c = conn.cursor()
+            c.execute('SELECT license_plate, model FROM vehicles WHERE is_active = TRUE')
+            vehicles = c.fetchall()
+            conn.close()
+            
+            if vehicles:
+                keyboard = [[f"🚒 {v[0]} - {v[1]}"] for v in vehicles]
+                keyboard.append(['Annulla'])
+                await update.message.reply_text(
+                    "🚒 **SELEZIONA MEZZI UTILIZZATI**",
+                    reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+                )
+                return NEW_INTERVENTION_VEHICLES
+            else:
+                await update.message.reply_text("Inserisci i mezzi utilizzati (separati da virgola):")
+                return NEW_INTERVENTION_VEHICLES
+        
+        # Gestione selezione/deselezione partecipanti
+        person_text = update.message.text
+        if person_text.startswith('☐ '):
+            person_name = person_text[2:].strip()
+            if 'selected_participants' not in context.user_data:
+                context.user_data['selected_participants'] = []
+            if person_name not in context.user_data['selected_participants']:
+                context.user_data['selected_participants'].append(person_name)
+            
+            # Aggiorna tastiera
+            keyboard = []
+            for person in context.user_data['available_personnel']:
+                if person in context.user_data['selected_participants']:
+                    keyboard.append([f"☑️ {person}"])
+                else:
+                    keyboard.append([f"☐ {person}"])
+            keyboard.append(['✅ Conferma Partecipanti'])
+            keyboard.append(['Annulla'])
+            
+            await update.message.reply_text(
+                f"👥 **PARTECIPANTI SELEZIONATI: {len(context.user_data['selected_participants'])}**\n\n"
+                "Continua a selezionare o clicca 'Conferma Partecipanti'",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            )
+            return NEW_INTERVENTION_PARTICIPANTS
+        
+        elif person_text.startswith('☑️ '):
+            person_name = person_text[3:].strip()
+            if 'selected_participants' in context.user_data and person_name in context.user_data['selected_participants']:
+                context.user_data['selected_participants'].remove(person_name)
+            
+            # Aggiorna tastiera
+            keyboard = []
+            for person in context.user_data['available_personnel']:
+                if person in context.user_data['selected_participants']:
+                    keyboard.append([f"☑️ {person}"])
+                else:
+                    keyboard.append([f"☐ {person}"])
+            keyboard.append(['✅ Conferma Partecipanti'])
+            keyboard.append(['Annulla'])
+            
+            await update.message.reply_text(
+                f"👥 **PARTECIPANTI SELEZIONATI: {len(context.user_data['selected_participants'])}**\n\n"
+                "Continua a selezionare o clicca 'Conferma Partecipanti'",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            )
+            return NEW_INTERVENTION_PARTICIPANTS
+        
+        else:
+            # Inserimento manuale
+            participants = [p.strip() for p in update.message.text.split(',')]
+            context.user_data['participants'] = participants
+            
+            conn = sqlite3.connect(DATABASE_NAME)
+            c = conn.cursor()
+            c.execute('SELECT license_plate, model FROM vehicles WHERE is_active = TRUE')
+            vehicles = c.fetchall()
+            conn.close()
+            
+            if vehicles:
+                vehicle_list = "\n".join([f"🚒 {v[0]} - {v[1]}" for v in vehicles])
+                await update.message.reply_text(
+                    f"Mezzi disponibili:\n{vehicle_list}\n\n"
+                    "Inserisci i mezzi utilizzati (separati da virgola, formato: TARGA1, TARGA2):"
+                )
+            else:
+                await update.message.reply_text("Inserisci i mezzi utilizzati (separati da virgola):")
+            return NEW_INTERVENTION_VEHICLES
 
     async def new_intervention_vehicles(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message.text == 'Annulla':
             return await self.cancel(update, context)
         
-        vehicles = [v.strip() for v in update.message.text.split(',')]
+        # Gestione selezione mezzi dalla tastiera
+        if '🚒' in update.message.text:
+            vehicle_text = update.message.text
+            vehicle_plate = vehicle_text.split('🚒 ')[1].split(' - ')[0].strip()
+            vehicles = [vehicle_plate]
+        else:
+            vehicles = [v.strip() for v in update.message.text.split(',')]
         
         # Salva l'intervento
         user = update.effective_user
@@ -410,7 +564,232 @@ class VigiliBot:
         
         is_admin = self.is_admin(user.id)
         await update.message.reply_text(
-            "✅ Intervento registrato con successo!",
+            "✅ **INTERVENTO REGISTRATO CON SUCCESSO!**",
+            reply_markup=self.get_main_keyboard(is_admin)
+        )
+        return ConversationHandler.END
+
+    # 🔥 GESTIONE VIGILI - MODIFICA STATO
+    async def manage_personnel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Menu per modificare lo stato del personale"""
+        user = update.effective_user
+        if not self.is_admin(user.id):
+            await update.message.reply_text("❌ Solo gli admin possono gestire il personale.")
+            return
+        
+        conn = sqlite3.connect(DATABASE_NAME)
+        c = conn.cursor()
+        c.execute('SELECT id, full_name, qualification, license_grade FROM personnel WHERE is_active = TRUE ORDER BY full_name')
+        personnel = c.fetchall()
+        conn.close()
+        
+        if not personnel:
+            await update.message.reply_text("❌ Nessun personale registrato.")
+            return
+        
+        keyboard = []
+        for person in personnel:
+            keyboard.append([f"👤 {person[1]} ({person[2]} - {person[3]})"])
+        keyboard.append(['🔙 Indietro'])
+        
+        await update.message.reply_text(
+            "👥 **GESTIONE PERSONALE**\n\n"
+            "Seleziona il vigile da modificare:",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return MANAGE_PERSONNEL_SELECTED
+
+    async def manage_personnel_selected(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == '🔙 Indietro':
+            is_admin = self.is_admin(update.effective_user.id)
+            await update.message.reply_text(
+                "Operazione annullata.",
+                reply_markup=self.get_main_keyboard(is_admin)
+            )
+            return ConversationHandler.END
+        
+        # Estrai nome del vigile
+        person_text = update.message.text
+        person_name = person_text.replace('👤 ', '').split(' (')[0].strip()
+        context.user_data['editing_person'] = person_name
+        
+        # Recupera info attuali del vigile
+        conn = sqlite3.connect(DATABASE_NAME)
+        c = conn.cursor()
+        c.execute('SELECT qualification, license_grade, has_nautical_license, is_saf, is_tpss FROM personnel WHERE full_name = ?', (person_name,))
+        person_info = c.fetchone()
+        conn.close()
+        
+        qualifica, patente, nautica, saf, tpss = person_info
+        
+        keyboard = [
+            ['🔄 Aggiorna Patente', '⭐ Aggiorna Qualifica'],
+            ['🚢 Patente Nautica', '🛡️ SAF/TPSS'],
+            ['🔙 Indietro']
+        ]
+        
+        status_info = f"🚢 Nautica: {'Sì' if nautica else 'No'}\n🛡️ SAF: {'Sì' if saf else 'No'}\n🛡️ TPSS: {'Sì' if tpss else 'No'}"
+        
+        await update.message.reply_text(
+            f"✏️ **MODIFICA: {person_name}**\n\n"
+            f"📋 Attuale: {qualifica} - {patente}\n"
+            f"{status_info}\n\n"
+            "Cosa vuoi modificare?",
+            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        )
+        return MANAGE_PERSONNEL_ACTION
+
+    async def manage_personnel_action(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == '🔙 Indietro':
+            return await self.manage_personnel(update, context)
+        
+        action = update.message.text
+        person_name = context.user_data['editing_person']
+        
+        if action == '🔄 Aggiorna Patente':
+            license_grades = ["IIIE", "III", "II", "I"]
+            keyboard = [[grade] for grade in license_grades]
+            keyboard.append(['🔙 Indietro'])
+            
+            await update.message.reply_text(
+                "📚 **SELEZIONA NUOVO GRADO PATENTE**",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            )
+            return UPDATE_LICENSE_CONFIRM
+            
+        elif action == '⭐ Aggiorna Qualifica':
+            qualifications = ["VV", "CSV"]
+            keyboard = [[qual] for qual in qualifications]
+            keyboard.append(['🔙 Indietro'])
+            
+            await update.message.reply_text(
+                "📋 **SELEZIONA NUOVA QUALIFICA**",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            )
+            return UPDATE_QUALIFICATION_CONFIRM
+            
+        elif action == '🚢 Patente Nautica':
+            keyboard = [['✅ Attiva Nautica', '❌ Disattiva Nautica'], ['🔙 Indietro']]
+            
+            await update.message.reply_text(
+                "🚢 **GESTIONE PATENTE NAUTICA**",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            )
+            return UPDATE_NAUTICAL_CONFIRM
+            
+        elif action == '🛡️ SAF/TPSS':
+            keyboard = [
+                ['✅ SAF', '❌ SAF'],
+                ['✅ TPSS', '❌ TPSS'],
+                ['🔙 Indietro']
+            ]
+            
+            await update.message.reply_text(
+                "🛡️ **GESTIONE SAF/TPSS**",
+                reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            )
+            return UPDATE_SAF_TPSS_CONFIRM
+
+    async def update_license_confirm(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == '🔙 Indietro':
+            return await self.manage_personnel_selected(update, context)
+        
+        new_license = update.message.text
+        person_name = context.user_data['editing_person']
+        
+        # Aggiorna nel database
+        conn = sqlite3.connect(DATABASE_NAME)
+        c = conn.cursor()
+        c.execute('UPDATE personnel SET license_grade = ? WHERE full_name = ?', (new_license, person_name))
+        conn.commit()
+        conn.close()
+        
+        is_admin = self.is_admin(update.effective_user.id)
+        await update.message.reply_text(
+            f"✅ **PATENTE AGGIORNATA!**\n\n"
+            f"👤 {person_name}\n"
+            f"📚 Nuovo grado: {new_license}",
+            reply_markup=self.get_main_keyboard(is_admin)
+        )
+        return ConversationHandler.END
+
+    async def update_qualification_confirm(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == '🔙 Indietro':
+            return await self.manage_personnel_selected(update, context)
+        
+        new_qualification = update.message.text
+        person_name = context.user_data['editing_person']
+        
+        # Aggiorna nel database
+        conn = sqlite3.connect(DATABASE_NAME)
+        c = conn.cursor()
+        c.execute('UPDATE personnel SET qualification = ? WHERE full_name = ?', (new_qualification, person_name))
+        conn.commit()
+        conn.close()
+        
+        is_admin = self.is_admin(update.effective_user.id)
+        await update.message.reply_text(
+            f"✅ **QUALIFICA AGGIORNATA!**\n\n"
+            f"👤 {person_name}\n"
+            f"⭐ Nuova qualifica: {new_qualification}",
+            reply_markup=self.get_main_keyboard(is_admin)
+        )
+        return ConversationHandler.END
+
+    async def update_nautical_confirm(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == '🔙 Indietro':
+            return await self.manage_personnel_selected(update, context)
+        
+        action = update.message.text
+        person_name = context.user_data['editing_person']
+        has_nautical = action == '✅ Attiva Nautica'
+        
+        # Aggiorna nel database
+        conn = sqlite3.connect(DATABASE_NAME)
+        c = conn.cursor()
+        c.execute('UPDATE personnel SET has_nautical_license = ? WHERE full_name = ?', (has_nautical, person_name))
+        conn.commit()
+        conn.close()
+        
+        is_admin = self.is_admin(update.effective_user.id)
+        status = "ATTIVATA" if has_nautical else "DISATTIVATA"
+        await update.message.reply_text(
+            f"✅ **PATENTE NAUTICA {status}!**\n\n"
+            f"👤 {person_name}\n"
+            f"🚢 Nautica: {'Sì' if has_nautical else 'No'}",
+            reply_markup=self.get_main_keyboard(is_admin)
+        )
+        return ConversationHandler.END
+
+    async def update_saf_tpss_confirm(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.message.text == '🔙 Indietro':
+            return await self.manage_personnel_selected(update, context)
+        
+        action = update.message.text
+        person_name = context.user_data['editing_person']
+        
+        conn = sqlite3.connect(DATABASE_NAME)
+        c = conn.cursor()
+        
+        if action in ['✅ SAF', '❌ SAF']:
+            is_saf = action == '✅ SAF'
+            c.execute('UPDATE personnel SET is_saf = ? WHERE full_name = ?', (is_saf, person_name))
+            status = "ATTIVATO" if is_saf else "DISATTIVATO"
+            qualifica = "SAF"
+        else:
+            is_tpss = action == '✅ TPSS'
+            c.execute('UPDATE personnel SET is_tpss = ? WHERE full_name = ?', (is_tpss, person_name))
+            status = "ATTIVATO" if is_tpss else "DISATTIVATO"
+            qualifica = "TPSS"
+        
+        conn.commit()
+        conn.close()
+        
+        is_admin = self.is_admin(update.effective_user.id)
+        await update.message.reply_text(
+            f"✅ **{qualifica} {status}!**\n\n"
+            f"👤 {person_name}\n"
+            f"🛡️ {qualifica}: {'Sì' if status == 'ATTIVATO' else 'No'}",
             reply_markup=self.get_main_keyboard(is_admin)
         )
         return ConversationHandler.END
@@ -807,7 +1186,7 @@ class VigiliBot:
             conn.close()
             await query.edit_message_text(f"❌ Richiesta rifiutata.")
 
-    # 🔥 GESTIONE PERSONALE (ADMIN)
+    # 🔥 GESTIONE PERSONALE (ADMIN) - AGGIUNGI NUOVO
     async def start_add_personnel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         qualifications = ["VV", "CSV"]
         keyboard = [[q] for q in qualifications]
@@ -1048,6 +1427,21 @@ class VigiliBot:
         )
         self.application.add_handler(personnel_conv)
 
+        # Conversazione gestione personale (solo admin)
+        personnel_manage_conv = ConversationHandler(
+            entry_points=[MessageHandler(filters.Regex('^✏️ Gestione Vigili$'), self.manage_personnel)],
+            states={
+                MANAGE_PERSONNEL_SELECTED: [MessageHandler(filters.TEXT, self.manage_personnel_selected)],
+                MANAGE_PERSONNEL_ACTION: [MessageHandler(filters.TEXT, self.manage_personnel_action)],
+                UPDATE_LICENSE_CONFIRM: [MessageHandler(filters.TEXT, self.update_license_confirm)],
+                UPDATE_QUALIFICATION_CONFIRM: [MessageHandler(filters.TEXT, self.update_qualification_confirm)],
+                UPDATE_NAUTICAL_CONFIRM: [MessageHandler(filters.TEXT, self.update_nautical_confirm)],
+                UPDATE_SAF_TPSS_CONFIRM: [MessageHandler(filters.TEXT, self.update_saf_tpss_confirm)],
+            },
+            fallbacks=[CommandHandler('cancel', self.cancel)]
+        )
+        self.application.add_handler(personnel_manage_conv)
+
         # Conversazione aggiungi mezzo (solo admin)
         vehicle_conv = ConversationHandler(
             entry_points=[MessageHandler(filters.Regex('^🚗 Aggiungi Mezzo$'), self.start_add_vehicle)],
@@ -1063,7 +1457,7 @@ class VigiliBot:
         """Avvia il bot"""
         self.application = Application.builder().token(self.token).build()
         self.setup_handlers()
-        logger.info("🤖 Bot Vigili del Fuoco avviato con ESPORTAZIONE PER ANNO!")
+        logger.info("🤖 Bot Vigili del Fuoco avviato con GESTIONE VIGILI COMPLETA!")
         self.application.run_polling()
 
 def main():
