@@ -41,8 +41,7 @@ class VigiliBot:
         self.token = token
         self.application = None
         self.init_db()
-        self.setup_admins()
-        
+    
     def init_db(self):
         """Inizializza database SQLite"""
         conn = sqlite3.connect(DATABASE_NAME)
@@ -131,16 +130,26 @@ class VigiliBot:
         conn.close()
         logger.info("✅ Database inizializzato")
     
-    def setup_admins(self):
-        """Configura admin iniziali"""
+    def setup_admins_and_users(self):
+        """Configura admin e utenti automaticamente all'avvio"""
         admin_ids = [1816045269, 653425963, 693843502]
+        
         conn = sqlite3.connect(DATABASE_NAME)
         c = conn.cursor()
+        
+        # Configura admin
         for admin_id in admin_ids:
+            # Inserisci nella tabella admins
             c.execute('INSERT OR IGNORE INTO admins (telegram_id) VALUES (?)', (admin_id,))
+            # Inserisci anche nella tabella users come attivo
+            c.execute('''
+                INSERT OR REPLACE INTO users (telegram_id, username, full_name, role, is_active) 
+                VALUES (?, 'admin', 'Admin User', 'user', TRUE)
+            ''', (admin_id,))
+        
         conn.commit()
         conn.close()
-        logger.info(f"👑 Admin configurati: {admin_ids}")
+        logger.info(f"👑 Admin configurati automaticamente: {admin_ids}")
     
     def get_main_keyboard(self, is_admin=False):
         """Tastiera principale"""
@@ -171,35 +180,60 @@ class VigiliBot:
         conn.close()
         return years
 
-    # 🔥 GESTIONE UTENTI E ACCESSO
+    # 🔥 GESTIONE UTENTI E ACCESSO - VERSIONE MIGLIORATA
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         telegram_id = user.id
         
+        # Lista degli admin pre-autorizzati
+        admin_ids = [1816045269, 653425963, 693843502]
+        
         conn = sqlite3.connect(DATABASE_NAME)
         c = conn.cursor()
-        c.execute('SELECT * FROM users WHERE telegram_id = ? AND is_active = TRUE', (telegram_id,))
-        existing_user = c.fetchone()
         
-        if existing_user:
+        # Se l'utente è nella lista admin, approvalo automaticamente
+        if telegram_id in admin_ids:
+            c.execute('''
+                INSERT OR REPLACE INTO users (telegram_id, username, full_name, role, is_active) 
+                VALUES (?, ?, ?, 'user', TRUE)
+            ''', (telegram_id, user.username, user.full_name))
+            
+            # Assicurati che sia nella tabella admins
+            c.execute('INSERT OR IGNORE INTO admins (telegram_id) VALUES (?)', (telegram_id,))
+            
+            conn.commit()
+            conn.close()
+            
             is_admin = self.is_admin(telegram_id)
             await update.message.reply_text(
-                f"Benvenuto {user.full_name}!\n"
-                f"Sei registrato come: {'Admin' if is_admin else 'User'}",
+                f"👑 Benvenuto Admin {user.full_name}!\n"
+                f"Sei stato riconosciuto automaticamente come amministratore.",
                 reply_markup=self.get_main_keyboard(is_admin)
             )
         else:
-            c.execute('''
-                INSERT OR REPLACE INTO access_requests (telegram_id, username, full_name, status)
-                VALUES (?, ?, ?, 'pending')
-            ''', (telegram_id, user.username, user.full_name))
-            conn.commit()
-            await update.message.reply_text(
-                f"Ciao {user.full_name}!\n"
-                "La tua richiesta di accesso è stata inviata agli amministratori.\n"
-                "Riceverai una notifica quando verrà approvata.",
-                reply_markup=ReplyKeyboardRemove()
-            )
+            # Per utenti normali, richiesta di accesso
+            c.execute('SELECT * FROM users WHERE telegram_id = ? AND is_active = TRUE', (telegram_id,))
+            existing_user = c.fetchone()
+            
+            if existing_user:
+                is_admin = self.is_admin(telegram_id)
+                await update.message.reply_text(
+                    f"Benvenuto {user.full_name}!\n"
+                    f"Sei registrato come: {'Admin' if is_admin else 'User'}",
+                    reply_markup=self.get_main_keyboard(is_admin)
+                )
+            else:
+                c.execute('''
+                    INSERT OR REPLACE INTO access_requests (telegram_id, username, full_name, status)
+                    VALUES (?, ?, ?, 'pending')
+                ''', (telegram_id, user.username, user.full_name))
+                conn.commit()
+                await update.message.reply_text(
+                    f"Ciao {user.full_name}!\n"
+                    "La tua richiesta di accesso è stata inviata agli amministratori.\n"
+                    "Riceverai una notifica quando verrà approvata.",
+                    reply_markup=ReplyKeyboardRemove()
+                )
         conn.close()
 
     # 🔥 GESTIONE MESSAGGI PRINCIPALI
@@ -493,7 +527,7 @@ class VigiliBot:
         
         return ConversationHandler.END
 
-    # 🔥 ESPORTAZIONE DATI (NUOVA FEATURE COMPLETA)
+    # 🔥 ESPORTAZIONE DATI
     async def export_data_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         if not self.is_admin(user.id):
@@ -1042,13 +1076,15 @@ def main():
     # 1. RIPRISTINO DATABASE ALL'AVVIO
     if not enhanced_restore_on_startup():
         print("📝 Inizializzazione database nuovo...")
-        # Il database si inizializza automaticamente nel __init__
     
-    # 2. AVVIA SISTEMA BACKUP
+    # 2. CONFIGURA ADMIN AUTOMATICA
+    bot = VigiliBot(BOT_TOKEN)
+    bot.setup_admins_and_users()  # 👈 NUOVA FUNZIONE
+    
+    # 3. AVVIA SISTEMA BACKUP
     start_backup_system()
     
-    # 3. AVVIA BOT
-    bot = VigiliBot(BOT_TOKEN)
+    # 4. AVVIA BOT
     bot.run()
 
 if __name__ == "__main__":
