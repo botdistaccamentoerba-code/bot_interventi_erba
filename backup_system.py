@@ -1,10 +1,14 @@
-import sqlite3
-import json
+# backup_system.py (mantieni quello esistente)
 import os
-import shutil
-from datetime import datetime
+import sqlite3
+import base64
+import json
+import requests
 import time
 import threading
+from datetime import datetime
+
+# ... (il codice backup esistente rimane uguale) ...
 
 DATABASE_NAME = 'vigili.db'
 
